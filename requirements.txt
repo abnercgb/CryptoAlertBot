@@ -1,0 +1,11 @@
+flask
+python-dotenv
+sqlalchemy
+pydantic>=2.0
+openai
+python-telegram-bot==13.15 # <-- Force esta versão!
+openai
+telegram
+pycoingecko
+apscheduler
+pytz
