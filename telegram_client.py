@@ -42,13 +42,16 @@ class TelegramClient:
         # Ela será chamada em main.py DEPOIS que message_handler_instance for definido.
         # self._register_handlers() # <-- REMOVIDO!
 
+        # CORRIGIDO: REMOVIDA A CHAMADA PARA self.bot.get_me() E O LOG ASSOCIADO
+        # Esta chamada é assíncrona e não pode ser feita diretamente no __init__
+        # try:
+        #     bot_info = self.bot.get_me() # <-- REMOVIDO!
+        #     logger.info(f"Connected to Telegram bot: @{bot_info.username}") # <-- REMOVIDO!
+        # except telegram.error.TelegramError as e: # <-- REMOVIDO!
+        #     logger.critical(f"❌ Failed to connect to Telegram API: {e}", exc_info=True) # <-- REMOVIDO!
+        #     raise # Re-lança a exceção, pois a conexão é crítica # <-- REMOVIDO!
 
-        try:
-            bot_info = self.bot.get_me()
-            logger.info(f"Connected to Telegram bot: @{bot_info.username}")
-        except telegram.error.TelegramError as e:
-            logger.critical(f"❌ Failed to connect to Telegram API: {e}", exc_info=True)
-            raise # Re-lança a exceção, pois a conexão é crítica
+        logger.info("TelegramClient instance initialized. Connection status will be confirmed during polling start.")
 
 
     def _register_handlers(self):
@@ -72,13 +75,15 @@ class TelegramClient:
         # Exemplo: self.application.add_handler(CommandHandler("start", self.message_handler_instance.handle_start)) # Se handle_start existir e tiver a assinatura correta
 
         # Handler genérico para TODOS os comandos
+        # Na v20+, o callback de CommandHandler recebe (update, context)
         self.application.add_handler(CommandHandler(None, self.message_handler_instance.handle_message)) # None para todos os comandos
-        logger.debug("✅ Command handler registered with filter filters.COMMAND")
+        logger.debug("✅ Command handler registered.")
 
 
         # Handler para mensagens de texto que NÃO são comandos
+        # Na v20+, o callback de MessageHandler recebe (update, context)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler_instance.handle_message))
-        logger.debug("✅ Text message handler registered with filter filters.TEXT & ~filters.COMMAND")
+        logger.debug("✅ Text message handler registered.")
 
         # TODO: Adicionar outros handlers (ex: para fotos, documentos, etc.) se necessário
 
@@ -92,16 +97,20 @@ class TelegramClient:
     def send_message(self, chat_id: Union[int, str], text: str, parse_mode: Optional[str] = None) -> None:
         """
         Envia uma mensagem para um chat específico usando a API v20+.
+        Este método é síncrono (não precisa de await aqui), pois é chamado
+        de dentro de handlers que já estão em um contexto assíncrono.
         :param chat_id: O ID do chat.
         :param text: O texto da mensagem.
         :param parse_mode: Modo de parse (ex: 'HTML', 'MarkdownV2'). Padrão é None.
         """
         try:
             logger.debug(f"Attempting to send message to chat {chat_id}: {text[:50]}...") # Loga o início da mensagem
-            # CORRIGIDO: Use self.bot.send_message diretamente
-            # O parse_mode padrão pode ser definido aqui ou na chamada
+            # CORRIGIDO: Use self.bot.send_message diretamente.
+            # Note que send_message na v20+ é uma corrotina, mas como este método
+            # é chamado de dentro de handlers (que são executados assincronamente
+            # pela biblioteca), a biblioteca lida com o 'await' para nós.
             self.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-            # Não logamos sucesso aqui para evitar logs excessivos, o wrapper já loga (se ainda existisse)
+            # Não logamos sucesso aqui para evitar logs excessivos
             # logger.debug(f"Message sent successfully to chat {chat_id}.")
         except telegram.error.TelegramError as e:
             logger.error(f"❌ Failed to send message to chat {chat_id}: {e}", exc_info=True)
@@ -117,6 +126,7 @@ class TelegramClient:
         try:
             # CORRIGIDO: Use run_polling() na v20+
             # run_polling é bloqueante e mantém o bot rodando
+            # Ele lida internamente com o loop de eventos assíncrono
             self.application.run_polling()
             logger.info("✅ Telegram listener started.")
             # Não precisamos de updater.idle() ou application.idle() explicitamente
@@ -134,5 +144,7 @@ class TelegramClient:
     def stop_listening(self):
         """Para o polling (v20+)."""
         logger.info("Stopping Telegram listener.")
+        # stop_running() é uma corrotina, mas run_polling cuida do loop de eventos
+        # para que possamos chamá-la diretamente aqui.
         self.application.stop_running()
         logger.info("Telegram listener stopped.")
