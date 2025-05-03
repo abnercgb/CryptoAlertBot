@@ -47,6 +47,12 @@ if not TELEGRAM_BOT_TOKEN:
     logger.critical("❌ TELEGRAM_BOT_TOKEN environment variable not set. Exiting.")
     exit(1) # Sai do script se o token não estiver configurado
 
+# Verificar se o chat ID para alertas/mensagens de status está configurado
+if not TELEGRAM_CHAT_ID:
+    logger.warning("⚠️ TELEGRAM_CHAT_ID environment variable not set. Cannot send startup messages or general alerts.")
+    # Não saímos, mas algumas funcionalidades (como a mensagem de startup e alertas gerais) não funcionarão.
+
+
 # --- Inicialização das Classes ---
 try:
     db_manager = DatabaseManager(db_url=DATABASE_URL)
@@ -97,6 +103,20 @@ logger.info("Bot application starting...")
 # CORRIGIDO: Chamando o método start() do PriceMonitor
 price_monitor.start()
 logger.info("✅ Price monitoring service started.")
+
+# --- NOVO: Enviar mensagem de startup para o chat de alertas ---
+# Verifica se o chat ID para alertas está configurado antes de tentar enviar
+if TELEGRAM_CHAT_ID:
+    startup_message = "✅ Bot service started and is now monitoring prices and listening for commands."
+    try:
+        # Usa o telegram_client para enviar a mensagem para o chat de alertas
+        telegram_client.send_message(chat_id=TELEGRAM_CHAT_ID, text=startup_message)
+        logger.info(f"Startup message sent to chat ID: {TELEGRAM_CHAT_ID}")
+    except Exception as e:
+        logger.error(f"❌ Failed to send startup message to chat ID {TELEGRAM_CHAT_ID}: {e}", exc_info=True)
+else:
+    logger.warning("Skipping startup message as TELEGRAM_CHAT_ID is not set.")
+# --- Fim NOVO ---
 
 
 # Iniciar o listener do Telegram (polling)
