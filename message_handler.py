@@ -23,6 +23,11 @@ class DatabaseManager:
 class TelegramClient:
     def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = 'HTML') -> None: pass
     # Adiciona type hint para get_chat_member para o comando /addadmin
+    # Nota: get_chat_member é uma corrotina, e o handler atual é síncrono.
+    # A chamada real precisaria ser await self.telegram_client.bot.get_chat_member(...)
+    # em um handler assíncrono (async def). Mantemos o type hint para clareza,
+    # mas a funcionalidade de buscar nome por ID de argumento não funcionará
+    # corretamente sem handlers assíncronos.
     def get_chat_member(self, chat_id: Union[int, str], user_id: Union[int, str]) -> Optional[Any]: pass # Retorna objeto ChatMember ou None
 
 class PriceClientInterface:
@@ -41,11 +46,19 @@ if not logger.handlers:
 
 
 class MessageHandler:
+    # Ajustado type hints para usar as classes dummy definidas acima
     def __init__(self, db_manager: DatabaseManager, price_client: PriceClientInterface, telegram_client: TelegramClient):
+        """
+        Inicializa o MessageHandler com as dependências.
+        :param db_manager: Instância do DatabaseManager.
+        :param price_client: Instância do PriceClient (ex: CoinGeckoClient).
+        :param telegram_client: Instância do TelegramClient.
+        """
         if db_manager is None or price_client is None or telegram_client is None:
              logger.critical("❌ MessageHandler requires valid instances of DatabaseManager, PriceClient, and TelegramClient.")
              raise ValueError("Missing critical dependencies for MessageHandler")
 
+        # Guarda as instâncias REAIS passadas de main.py
         self.db_manager: DatabaseManager = db_manager
         self.price_client: PriceClientInterface = price_client
         self.telegram_client: TelegramClient = telegram_client
@@ -62,22 +75,24 @@ class MessageHandler:
             "start": (self.handle_start, ["iniciar", "começar"]),
             "help": (self.handle_help, ["ajuda", "comandos"]),
             "price": (self.handle_price, ["preço", "cotacao"]),
-            "favorite": (self.handle_favorite, ["favoritar", "fav"]),
-            "unfavorite": (self.handle_unfavorite, ["desfavoritar", "unfav"]),
-            "myfavorites": (self.handle_my_favorites, ["meusfavoritos", "favs"]),
-            "alert": (self.handle_alert, ["alerta"]),
-            "myalerts": (self.handle_my_alerts, ["meusalertas"]),
-            "clearalerts": (self.handle_clear_alerts, ["limparalertas"]),
-            "listcoins": (self.handle_list_coins, ["listar", "topmoedas", "moedas"]),
-            "broadcast": (self.handle_broadcast, ["transmitir", "enviartodos"]),
+            "favorite": (self.handle_favorite, ["favoritar", "fav"]), # Novo comando para favoritar
+            "unfavorite": (self.handle_unfavorite, ["desfavoritar", "unfav"]), # Novo comando para desfavoritar
+            "myfavorites": (self.handle_my_favorites, ["meusfavoritos", "favs"]), # Novo comando para listar favoritos
+            "alert": (self.handle_alert, ["alerta"]), # Comando para definir alerta de preço
+            "myalerts": (self.handle_my_alerts, ["meusalertas"]), # Comando para listar alertas
+            "clearalerts": (self.handle_clear_alerts, ["limparalertas"]), # Comando para limpar alertas
+            "listcoins": (self.handle_list_coins, ["listar", "topmoedas", "moedas"]), # Comando para listar moedas
+            "broadcast": (self.handle_broadcast, ["transmitir", "enviartodos"]), # Comando de broadcast
             # Comandos de Admin
             "addadmin": (self.handle_add_admin, ["promoveradmin"]),
             "removeadmin": (self.handle_remove_admin, ["rebaixaradmin"]),
             "isadmin": (self.handle_is_admin, ["checaradmin"]),
         }
 
+        # Mapeamento reverso de aliases para comandos internos (para roteamento rápido)
         self._alias_to_command: Dict[str, str] = {}
         for command, (_, aliases) in self.commands.items():
+            # Adiciona o comando interno como um alias de si mesmo
             self._alias_to_command[command.lower()] = command
             for alias in aliases:
                 self._alias_to_command[alias.lower()] = command
@@ -99,6 +114,7 @@ class MessageHandler:
 
         # Se não for o admin primário, verifica o status no banco de dados
         try:
+            # is_user_admin lida com a sessão internamente
             is_db_admin = self.db_manager.is_user_admin(user_id)
             if is_db_admin:
                  logger.debug(f"User {user_id} is admin (DB status).")
@@ -111,6 +127,10 @@ class MessageHandler:
 
 
     def handle_message(self, update: Any, context: Any) -> None:
+        """
+        Processa uma mensagem recebida do Telegram (v20+).
+        Identifica comandos, registra o usuário e roteia para o handler apropriado.
+        """
         message = update.effective_message
         if not message:
             logger.warning("Received update without an effective message.")
@@ -142,7 +162,7 @@ class MessageHandler:
 
         except Exception as e:
              logger.error(f"Error during user get/create or message logging for user {user_id}: {e}", exc_info=True)
-             pass
+             pass # Continua processando mesmo se o log falhar
 
 
         if message_text.startswith('/'):
@@ -162,8 +182,11 @@ class MessageHandler:
 
     # Adiciona update e context aos parâmetros
     def route_command(self, command_alias: str, command_args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """
+        Roteia um alias de comando para a função de tratamento interna correspondente (v20+).
+        """
         logger.debug(f"Normalized command alias '{command_alias}' to '{self._alias_to_command.get(command_alias, command_alias)}'.")
-        internal_command = self._alias_to_command.get(command_alias, command_alias)
+        internal_command = self._alias_to_command.get(command_alias, command_alias) # Busca o comando interno pelo alias
 
         handler_tuple = self.commands.get(internal_command)
 
@@ -174,6 +197,7 @@ class MessageHandler:
             try:
                 # Executa a função de tratamento do comando
                 # Passa args, user_id, chat_id, update, context para os handlers
+                # Handlers síncronos não precisam de await
                 handler_func(command_args, user_id, chat_id, update, context)
 
                 logger.debug(f"Route: {internal_command} -> Handler executed successfully.")
@@ -183,13 +207,21 @@ class MessageHandler:
                 self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro interno ao executar este comando.")
 
         else:
+            # Comando não reconhecido
             logger.warning(f"Unknown command alias received: /{command_alias} from user {user_id} in chat {chat_id}.")
             self.telegram_client.send_message(chat_id, f"Comando não reconhecido: /{command_alias}. Digite /ajuda para ver os comandos disponíveis.")
 
+
     # --- Função auxiliar para escapar caracteres MarkdownV2 ---
     def escape_markdownv2_response(self, text: Union[str, float, int]) -> str:
+        """Escapa caracteres especiais para MarkdownV2."""
         text_str = str(text)
-        special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
+        # Caracteres especiais em MarkdownV2 que precisam ser escapados na resposta
+        # Nota: A lista de caracteres pode variar ligeiramente dependendo de onde são usados.
+        # Para texto geral de resposta, focamos nos mais comuns que podem quebrar a formatação.
+        # Evitamos escapar * e _ se quisermos usá-los para negrito/itálico na resposta.
+        # Escapamos: [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+        special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
         return re.sub(special_chars, r'\\\1', text_str)
 
 
@@ -201,6 +233,7 @@ class MessageHandler:
         welcome_message += "Use os comandos para ver preços, definir alertas e mais.\n"
         welcome_message += "Digite /ajuda para ver a lista de comandos."
         self.telegram_client.send_message(chat_id, welcome_message)
+
 
     def handle_help(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /help."""
@@ -226,25 +259,30 @@ class MessageHandler:
 
     def handle_price(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /price."""
-        symbols = [s.strip() for s in args.split(',') if s.strip()]
+        symbols = [s.strip() for s in args.split(',') if s.strip()] # Divide argumentos por vírgula e remove espaços
         if not symbols:
             self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda (ex: /preço btc) ou múltiplos símbolos separados por vírgula (ex: /preço btc,eth).")
             return
 
+        # Limita o número de símbolos para evitar abuso da API
         if len(symbols) > 5:
              self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos por vez.")
              return
 
+
         logger.debug(f"Fetching price for symbols: {symbols} for user {user_id}")
+        # Obtém preços em USD e BRL
         prices_data = self.price_client.get_multiple_prices(symbols, currency=['usd', 'brl'])
 
-        response_lines = ["📊 **Preços Atuais:**"]
+        response_lines = ["📊 **Preços Atuais:**"] # Usando MarkdownV2 para negrito
         found_price = False
 
+        # Escapa caracteres especiais para MarkdownV2 na resposta
         def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
             text_str = str(text)
-            special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
+            special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
             return re.sub(special_chars, r'\\\1', text_str)
+
 
         for symbol in symbols:
             price_data = prices_data.get(symbol.upper())
@@ -255,21 +293,25 @@ class MessageHandler:
                 change_usd = price_data.get('price_change_percent_usd')
 
                 symbol_escaped = escape_markdownv2_response_local(symbol.upper())
-                price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A")
-                price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A")
+                price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A") # Formata e escapa
+                price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A") # Formata e escapa
 
-                line = f"- **{symbol_escaped}**: \\${price_usd_escaped}"
+                line = f"- **{symbol_escaped}**: \${price_usd_escaped}" # Escapa $
                 if price_brl is not None:
-                    line += f" \(R\\${price_brl_escaped}\)"
+                    line += f" \(R\${price_brl_escaped}\)" # Escapa ( ) R $
 
                 if change_usd is not None:
+                    # Formata a variação com sinal e 2 casas decimais
                     change_str = f"{change_usd:+.2f}%"
+                    # Adiciona cor baseada na variação (verde para positivo, vermelho para negativo)
+                    # Em MarkdownV2 simples, não temos cores, mas podemos indicar com emojis ou texto
                     if change_usd >= 0:
-                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\\)"
+                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\)" # Escapa ( ) e o texto
                     else:
-                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\\)"
+                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\)" # Escapa ( ) e o texto
                 else:
-                    line += " \(24h: N/A\\)"
+                    line += " \(24h: N/A\)" # Escapa ( ) e o texto
+
 
                 response_lines.append(line)
 
@@ -277,6 +319,8 @@ class MessageHandler:
             response_lines.append("Nenhum preço encontrado para os símbolos especificados.")
 
         response_text = "\n".join(response_lines)
+
+        # Envia a mensagem com MarkdownV2
         self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
 
 
@@ -287,17 +331,20 @@ class MessageHandler:
             self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda para favoritar (ex: /favoritar btc).")
             return
 
+        # Limita o número de símbolos
         if len(symbols) > 5:
              self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos para favoritar por vez.")
              return
 
         results = []
         for symbol in symbols:
+             # Verifica se o símbolo é válido antes de tentar favoritar
              if not self.price_client.is_valid_symbol(symbol):
                   results.append(f"❌ Símbolo '{symbol.upper()}' não reconhecido.")
                   continue
 
              try:
+                  # add_or_update_preference agora lida com a sessão internamente
                   preference = self.db_manager.add_or_update_preference(str(user_id), symbol.upper(), is_favorite=True)
                   if preference:
                        results.append(f"⭐ '{symbol.upper()}' adicionado aos seus favoritos.")
@@ -309,6 +356,7 @@ class MessageHandler:
 
         self.telegram_client.send_message(chat_id, "\n".join(results))
 
+
     def handle_unfavorite(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /desfavoritar."""
         symbols = [s.strip() for s in args.split(',') if s.strip()]
@@ -316,17 +364,22 @@ class MessageHandler:
             self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda para desfavoritar (ex: /desfavoritar btc).")
             return
 
+        # Limita o número de símbolos
         if len(symbols) > 5:
              self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos para desfavoritar por vez.")
              return
 
         results = []
         for symbol in symbols:
+             # Não precisamos verificar a valididade do símbolo aqui, pois limpar preferência lida com isso
              try:
+                  # clear_user_crypto_preferences agora lida com a sessão internamente
+                  # Limpa APENAS o status de favorito para o símbolo específico
                   cleared = self.db_manager.clear_user_crypto_preferences(str(user_id), symbol.upper(), clear_favorites=True, clear_alerts=False)
                   if cleared:
                        results.append(f"💔 '{symbol.upper()}' removido dos seus favoritos.")
                   else:
+                       # Pode ser que o símbolo não fosse favorito ou não existisse preferência
                        results.append(f"ℹ️ '{symbol.upper()}' não estava nos seus favoritos.")
              except Exception as e:
                   logger.error(f"Error unfavoriting symbol {symbol.upper()} for user {user_id}: {e}", exc_info=True)
@@ -334,23 +387,31 @@ class MessageHandler:
 
         self.telegram_client.send_message(chat_id, "\n".join(results))
 
+
     def handle_my_favorites(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /meusfavoritos."""
         try:
+            # get_user_crypto_preferences agora lida com a sessão e busca apenas com favoritos
             favorite_preferences = self.db_manager.get_user_crypto_preferences(str(user_id), is_favorite=True)
 
             if not favorite_preferences:
                 self.telegram_client.send_message(chat_id, "Você ainda não favoritou nenhuma moeda. Use /favoritar [símbolo] para adicionar.")
                 return
 
+            # Coleta os símbolos favoritos para buscar os preços atuais
             favorite_symbols = [pref.symbol for pref in favorite_preferences]
-            prices_data = self.price_client.get_multiple_prices(favorite_symbols, currency=['usd', 'brl'])
-            response_lines = ["⭐ **Suas moedas favoritas:**"]
 
+            # Obtém os preços atuais para as moedas favoritas
+            prices_data = self.price_client.get_multiple_prices(favorite_symbols, currency=['usd', 'brl'])
+
+            response_lines = ["⭐ **Suas moedas favoritas:**"] # Usando MarkdownV2
+
+            # Escapa caracteres especiais para MarkdownV2 na resposta
             def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
                 text_str = str(text)
-                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
                 return re.sub(special_chars, r'\\\1', text_str)
+
 
             for symbol in favorite_symbols:
                  price_data = prices_data.get(symbol.upper())
@@ -360,25 +421,27 @@ class MessageHandler:
                       change_usd = price_data.get('price_change_percent_usd')
 
                       symbol_escaped = escape_markdownv2_response_local(symbol.upper())
-                      price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A")
-                      price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A")
+                      price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A") # Formata e escapa
+                      price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A") # Formata e escapa
 
-                      line = f"- **{symbol_escaped}**: \\${price_usd_escaped}"
+                      line = f"- **{symbol_escaped}**: \${price_usd_escaped}" # Escapa $
                       if price_brl is not None:
-                           line += f" \(R\\${price_brl_escaped}\)"
+                           line += f" \(R\${price_brl_escaped}\)" # Escapa ( ) R $
 
                       if change_usd is not None:
                            change_str = f"{change_usd:+.2f}%"
                            if change_usd >= 0:
-                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\\)"
+                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\)" # Escapa ( ) e o texto
                            else:
-                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\\)"
+                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\)" # Escapa ( ) e o texto
                       else:
-                           line += " \(24h: N/A\\)"
+                           line += " \(24h: N/A\)" # Escapa ( ) e o texto
 
                       response_lines.append(line)
                  else:
+                      # Se o preço não foi encontrado, apenas lista o símbolo
                       response_lines.append(f"- **{escape_markdownv2_response_local(symbol.upper())}**: Preço não disponível")
+
 
             response_text = "\n".join(response_lines)
             self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
@@ -390,6 +453,7 @@ class MessageHandler:
 
     def handle_alert(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /alerta."""
+        # Espera args no formato: [símbolo] [alta/baixa] [preço]
         parts = args.split()
         if len(parts) != 3:
             self.telegram_client.send_message(chat_id, "Uso correto: /alerta [símbolo] [alta/baixa] [preço] (ex: /alerta eth alta 2000)")
@@ -412,14 +476,17 @@ class MessageHandler:
             self.telegram_client.send_message(chat_id, "Preço inválido. Por favor, insira um número válido.")
             return
 
+        # Verifica se o símbolo é válido antes de definir o alerta
         if not self.price_client.is_valid_symbol(symbol):
              self.telegram_client.send_message(chat_id, f"Símbolo '{symbol}' não reconhecido. Por favor, use um símbolo válido (ex: BTC, ETH).")
              return
+
 
         try:
             high_alert = price if alert_type == 'alta' else None
             low_alert = price if alert_type == 'baixa' else None
 
+            # add_or_update_preference agora lida com a sessão e o reset de throttling
             preference = self.db_manager.add_or_update_preference(str(user_id), symbol, high_alert=high_alert, low_alert=low_alert)
 
             if preference:
@@ -436,32 +503,37 @@ class MessageHandler:
     def handle_my_alerts(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /meusalertas."""
         try:
+            # get_user_crypto_preferences agora lida com a sessão e busca apenas com alertas
             alert_preferences = self.db_manager.get_user_crypto_preferences(str(user_id), with_alerts=True)
 
             if not alert_preferences:
                 self.telegram_client.send_message(chat_id, "Você ainda não configurou nenhum alerta de preço. Use /alerta [símbolo] [alta/baixa] [preço] para adicionar.")
                 return
 
-            response_lines = ["🔔 **Seus alertas de preço configurados:**"]
+            response_lines = ["🔔 **Seus alertas de preço configurados:**"] # Usando MarkdownV2
 
+            # Escapa caracteres especiais para MarkdownV2 na resposta
             def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
                 text_str = str(text)
-                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
                 return re.sub(special_chars, r'\\\1', text_str)
+
 
             for pref in alert_preferences:
                 symbol_escaped = escape_markdownv2_response_local(pref.symbol)
-                line_parts = [f"- **{symbol_escaped}**"]
+                line_parts = [f"- **{symbol_escaped}**"] # Inicia a linha com o símbolo
 
                 if pref.high_alert is not None:
                      high_price_escaped = escape_markdownv2_response_local(f"{pref.high_alert:,.2f}")
-                     line_parts.append(f"Alta > \\${high_price_escaped}")
+                     line_parts.append(f"Alta > \\${high_price_escaped}") # Escapa $
 
                 if pref.low_alert is not None:
                      low_price_escaped = escape_markdownv2_response_local(f"{pref.low_alert:,.2f}")
-                     line_parts.append(f"Baixa < \\${low_price_escaped}")
+                     line_parts.append(f"Baixa < \\${low_price_escaped}") # Escapa $
 
+                # Junta as partes com " e " se houver mais de uma parte de alerta
                 response_lines.append(": ".join(line_parts))
+
 
             response_text = "\n".join(response_lines)
             self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
@@ -473,13 +545,17 @@ class MessageHandler:
 
     def handle_clear_alerts(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
         """Trata o comando /limparalertas."""
+        # Espera args opcionais: [símbolo]
         symbol_to_clear = args.strip().upper() if args.strip() else None
 
         if symbol_to_clear and not self.price_client.is_valid_symbol(symbol_to_clear):
              self.telegram_client.send_message(chat_id, f"Símbolo '{symbol_to_clear}' não reconhecido. Por favor, use um símbolo válido ou nenhum para limpar todos os alertas.")
              return
 
+
         try:
+            # clear_user_crypto_preferences agora lida com a sessão e limpa alertas
+            # Limpa APENAS alertas (e o histórico de throttling)
             cleared = self.db_manager.clear_user_crypto_preferences(str(user_id), symbol_to_clear, clear_favorites=False, clear_alerts=True)
 
             if cleared:
@@ -505,23 +581,27 @@ class MessageHandler:
         Ex: /listar usd 10, /listar brl 20, /listar 50 (usa usd padrão)
         """
         parts = args.split()
-        vs_currency = 'usd'
-        per_page = 10
+        vs_currency = 'usd' # Moeda base padrão
+        per_page = 10 # Quantidade padrão
 
         if len(parts) == 1:
+             # Se um argumento foi fornecido, pode ser a quantidade ou a moeda
              try:
                   per_page = int(parts[0])
-                  if per_page <= 0 or per_page > 250:
+                  if per_page <= 0 or per_page > 250: # Limite da API
                        self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, especifique um número entre 1 e 250.")
                        return
              except ValueError:
+                  # Se não é um número, assume que é a moeda
                   vs_currency = parts[0].lower()
+                  # Poderíamos adicionar uma verificação de moeda válida aqui se tivéssemos uma lista
 
         elif len(parts) == 2:
+             # Se dois argumentos foram fornecidos, o primeiro é a moeda e o segundo é a quantidade
              vs_currency = parts[0].lower()
              try:
                   per_page = int(parts[1])
-                  if per_page <= 0 or per_page > 250:
+                  if per_page <= 0 or per_page > 250: # Limite da API
                        self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, especifique um número entre 1 e 250.")
                        return
              except ValueError:
@@ -535,47 +615,64 @@ class MessageHandler:
         logger.debug(f"Fetching list of coins for user {user_id} in {vs_currency}, {per_page} per page.")
 
         try:
+            # Chama o novo método do price_client
             coins_list = self.price_client.get_coins_list_with_price(vs_currency=vs_currency, per_page=per_page)
 
             if not coins_list:
                 self.telegram_client.send_message(chat_id, f"❌ Não foi possível obter a lista de moedas em {vs_currency.upper()}. Por favor, tente novamente mais tarde.")
                 return
 
-            response_lines = [f"🏆 **Top {len(coins_list)} moedas por Capitalização de Mercado em {vs_currency.upper()}:**"]
+            response_lines = [f"🏆 **Top {len(coins_list)} moedas por Capitalização de Mercado em {vs_currency.upper()}:**"] # Título MarkdownV2
 
+            # Escapa caracteres especiais para MarkdownV2 na resposta
             def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
                 text_str = str(text)
-                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
                 return re.sub(special_chars, r'\\\1', text_str)
 
+
             for coin in coins_list:
+                # Acessa os dados da moeda. Alguns campos podem ser None.
                 rank = coin.get('market_cap_rank', 'N/A')
                 symbol = coin.get('symbol', 'N/A').upper()
                 name = coin.get('name', 'N/A')
-                price = coin.get('current_price')
-                change_24h = coin.get('price_change_percentage_24h')
+                price = coin.get('current_price') # Pode ser None
+                change_24h = coin.get('price_change_percentage_24h') # Pode ser None
 
+                # Formata o preço e a variação
                 price_formatted = f"{price:,.2f}" if price is not None else "N/A"
                 change_formatted = f"{change_24h:+.2f}%" if change_24h is not None else "N/A"
 
+                # Adiciona emoji para variação
                 if change_24h is not None:
                      if change_24h >= 0:
                           change_formatted += " 🟢"
                      else:
                           change_formatted += " 🔴"
 
+                # Escapa os valores para MarkdownV2
                 rank_escaped = escape_markdownv2_response_local(rank)
                 symbol_escaped = escape_markdownv2_response_local(symbol)
                 name_escaped = escape_markdownv2_response_local(name)
                 price_escaped = escape_markdownv2_response_local(price_formatted)
                 change_escaped = escape_markdownv2_response_local(change_formatted)
 
-                line = f"{rank_escaped}\\. **{symbol_escaped}** \({name_escaped}\): \\${price_escaped} \(24h: {change_escaped}\)"
+
+                # Monta a linha da lista
+                # Ex: 1\. **BTC** \(Bitcoin\): \$96,000\.00 \(24h: \+2\.50\% 🟢\)
+                line = f"{rank_escaped}\\. **{symbol_escaped}** \({name_escaped}\): \\${price_escaped} \(24h: {change_escaped}\)" # Escapa . ( ) $
 
                 response_lines.append(line)
 
             response_text = "\n".join(response_lines)
+
+            # Envia a mensagem com MarkdownV2
             self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
+
+
+        except Exception as e:
+            logger.error(f"Error handling /listcoins for user {user_id}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro ao listar as moedas.")
 
 
     # CORRIGIDO: Lógica de verificação de admin agora usa a função combinada
@@ -601,6 +698,7 @@ class MessageHandler:
 
         # 3. Obter a lista de todos os IDs de usuário do banco de dados
         try:
+            # get_all_user_telegram_ids lida com a sessão internamente
             all_user_ids = self.db_manager.get_all_user_telegram_ids()
             logger.debug(f"Attempting to broadcast to {len(all_user_ids)} users.")
         except Exception as e:
@@ -617,6 +715,7 @@ class MessageHandler:
         failed_count = 0
         failed_users = []
 
+        # Escapa a mensagem para MarkdownV2 antes de enviar
         def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
             text_str = str(text)
             special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])'
@@ -626,9 +725,11 @@ class MessageHandler:
 
         for target_user_id in all_user_ids:
             try:
+                # Envia a mensagem, usando MarkdownV2
                 self.telegram_client.send_message(chat_id=str(target_user_id), text=broadcast_message_escaped, parse_mode='MarkdownV2')
                 sent_count += 1
                 logger.debug(f"Broadcast message sent to user ID: {target_user_id}")
+                # Pequeno delay para evitar limites de taxa da API do Telegram
                 time.sleep(0.1)
             except Exception as e:
                 failed_count += 1
@@ -640,6 +741,7 @@ class MessageHandler:
         if failed_count > 0:
             result_message += f"❌ Falha ao enviar para {failed_count} usuários (IDs: {', '.join(failed_users[:10])}{'...' if len(failed_users) > 10 else ''})."
 
+        # Envia o resultado do broadcast para o chat onde o comando foi iniciado (geralmente o chat privado do admin)
         self.telegram_client.send_message(chat_id, result_message)
         logger.info(f"Broadcast result reported to admin in chat {chat_id}.")
 
@@ -664,6 +766,7 @@ class MessageHandler:
             target_user_id = args.strip()
             # Nota: get_chat_member é assíncrona. Para chamá-la aqui, este handler precisaria ser async def.
             # Mantendo síncrono por enquanto, sem buscar nome por ID de argumento.
+            # Se precisar do nome, a estrutura assíncrona será necessária.
             pass # Não busca o nome por enquanto
 
         # Se não houver argumentos, tenta obter o ID da mensagem respondida
@@ -682,6 +785,7 @@ class MessageHandler:
              return
 
         # Garante que o usuário alvo existe no banco de dados (cria se não existir)
+        # Isso é importante para que possamos definir o status is_admin
         try:
              # get_or_create_user agora lida com a sessão internamente
              target_user = self.db_manager.get_or_create_user(telegram_id=target_user_id, username=target_username)
@@ -835,17 +939,9 @@ class MessageHandler:
         try:
              # get_or_create_user agora lida com a sessão internamente
              target_user = self.db_manager.get_or_create_user(telegram_id=target_user_id, username=target_username)
-             if not target_user:
-                  # Se não existe no DB, não pode ser admin do DB.
-                  # Mas ainda pode ser o admin primário da env var.
-                  is_admin = self._is_user_allowed_admin_command(target_user_id)
-                  user_display_name = target_username if target_username else f"ID {target_user_id}"
-                  if is_admin:
-                       self.telegram_client.send_message(chat_id, f"✅ Usuário {user_display_name} é um administrador (definido pela variável de ambiente).")
-                  else:
-                       self.telegram_client.send_message(chat_id, f"ℹ️ Usuário {user_display_name} não é um administrador.")
-                  return # Sai da função após checar e responder
-
+             # Se não existe no DB, get_or_create_user o criará com is_admin=False.
+             # A checagem abaixo _is_user_allowed_admin_command ainda funcionará
+             # porque ela verifica a env var ANTES de checar o DB.
         except Exception as e:
              logger.error(f"Error getting or creating target user {target_user_id} for isadmin: {e}", exc_info=True)
              self.telegram_client.send_message(chat_id, "❌ Ocorreu um erro ao acessar o banco de dados para checar o status do usuário.")
@@ -862,6 +958,9 @@ class MessageHandler:
                 if self.primary_admin_telegram_id and str(target_user_id) == str(self.primary_admin_telegram_id):
                      self.telegram_client.send_message(chat_id, f"✅ Usuário {user_display_name} é o administrador principal (definido pela variável de ambiente).")
                 else:
+                     # Busca o usuário novamente para ter certeza que o status is_admin está atualizado após get_or_create_user
+                     # ou apenas confia no resultado de _is_user_allowed_admin_command que já chamou is_user_admin
+                     # Vamos confiar em _is_user_allowed_admin_command para simplificar.
                      self.telegram_client.send_message(chat_id, f"✅ Usuário {user_display_name} é um administrador (definido no banco de dados).")
             else:
                 self.telegram_client.send_message(chat_id, f"ℹ️ Usuário {user_display_name} não é um administrador.")
