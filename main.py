@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 # Obter variáveis de ambiente
-# CORRIGIDO: Lendo a variável de ambiente TELEGRAM_TOKEN
+# Lendo a variável de ambiente TELEGRAM_TOKEN
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') # Usado para alertas gerais ou logs
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./database.db') # Padrão para SQLite local
@@ -47,7 +47,7 @@ TELEGRAM_ADMIN_ID = os.getenv('TELEGRAM_ADMIN_ID')
 
 
 # Verificar se o token do bot está configurado
-# CORRIGIDO: Verificando a variável TELEGRAM_TOKEN
+# Verificando a variável TELEGRAM_TOKEN
 if not TELEGRAM_TOKEN:
     logger.critical("❌ TELEGRAM_TOKEN environment variable not set. Exiting.")
     exit(1) # Sai do script se o token não estiver configurado
@@ -78,12 +78,8 @@ if not price_client.is_ready():
 logger.info("✅ CoinGeckoClient instance initialized and ready.")
 
 
-# Inicializar o MessageHandler (passando as instâncias reais)
-# O MessageHandler precisa da referência da função send_message do TelegramClient
-# Inicializamos TelegramClient primeiro e depois passamos a instância do MessageHandler.
-
-# Inicialização do TelegramClient (passando None temporariamente para message_handler_instance)
-# CORRIGIDO: Passando a variável TELEGRAM_TOKEN
+# Inicializar o TelegramClient (passando None temporariamente para message_handler_instance)
+# Passando a variável TELEGRAM_TOKEN
 telegram_client = TelegramClient(bot_token=TELEGRAM_TOKEN, message_handler_instance=None)
 logger.info("✅ TelegramClient instance initialized.")
 
@@ -97,6 +93,12 @@ logger.info("✅ MessageHandler instance created.")
 # Passando a instância completa do message_handler
 telegram_client.message_handler_instance = message_handler
 logger.info("✅ MessageHandler instance registered with TelegramClient.")
+
+# --- NOVO: Chamar _register_handlers() AGORA que message_handler_instance está definido ---
+# Esta chamada foi movida do __init__ do TelegramClient para cá.
+telegram_client._register_handlers()
+logger.info("✅ Telegram handlers registered.")
+# --- Fim NOVO ---
 
 
 # Inicializar o PriceMonitor (passando as instâncias reais)
