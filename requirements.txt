@@ -12,7 +12,8 @@ pycoingecko         # Cliente para a API da CoinGecko
 # A versão 3.9.1 de APScheduler é uma versão estável anterior a algumas mudanças significativas.
 # pytz é necessário para fusos horários.
 apscheduler==3.9.1
-pytz==2023.3.3 # Fixando uma versão específica de pytz também
+# CORRIGIDO: Fixando para uma versão de pytz que está na lista de disponíveis
+pytz==2023.3
 
 # Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
 pip
