@@ -1,6 +1,14 @@
 import logging
-from telegram.ext import Updater, MessageHandler, Filters
-from typing import Callable, Dict, Any, List, Optional, Union # <--- Optional e Union adicionados aqui
+import os
+import telegram
+# Importar as classes do telegram.ext
+# CORRIGIDO: Filters agora é importado diretamente de telegram.ext
+from telegram.ext import Application, MessageHandler, CommandHandler, filters # Use 'filters' em minúsculo para a nova API
+
+from typing import Dict, Any, Callable, Optional, List, Union
+
+# Importar a exceção específica do Telegram (se ainda precisar para tratamento de Conflict)
+from telegram.error import Conflict # Importa a exceção Conflict
 
 logger = logging.getLogger(__name__)
 
@@ -9,162 +17,111 @@ if not logger.handlers:
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
 
+
 class TelegramClient:
-    def __init__(self, token: str):
+    # CORRIGIDO: A inicialização na v20+ usa Application em vez de Updater
+    def __init__(self, bot_token: str, message_handler_instance: Any): # message_handler_instance será a instância do seu MessageHandler
         """
-        Inicializa o cliente Telegram com o token do bot.
-        :param token: O token HTTP API do seu bot Telegram.
+        Inicializa o TelegramClient e conecta ao Telegram usando a API v20+.
+        :param bot_token: O token do seu bot do Telegram.
+        # CORRIGIDO: Agora passamos a instância completa do MessageHandler
+        :param message_handler_instance: A instância do MessageHandler com os métodos de tratamento.
         """
-        if not token:
-            logger.critical("❌ Telegram token is required for TelegramClient initialization.")
-            # Levantar exceção fatal se o token não for fornecido
-            raise ValueError("Telegram token is missing")
+        if not bot_token:
+            logger.critical("❌ TELEGRAM_BOT_TOKEN is not set. Cannot initialize TelegramClient.")
+            raise ValueError("TELEGRAM_BOT_TOKEN is required.")
 
-        self.updater = None
-        self.dispatcher = None
+        # CORRIGIDO: Use Application.builder() para inicializar o bot na v20+
+        self.application = Application.builder().token(bot_token).build()
+        self.bot = self.application.bot # O objeto bot está acessível via application
+        self.message_handler_instance = message_handler_instance # Guarda a referência da instância do MessageHandler
+
+        # Registrar os handlers
+        self._register_handlers()
+
         try:
-            # Cria um objeto Updater para receber atualizações do Telegram
-            self.updater = Updater(token)
-
-            # Obtém o Dispatcher para registrar handlers
-            self.dispatcher = self.updater.dispatcher
-
-            # Opcional: Logar informações do bot
-            bot_info = self.updater.bot.get_me()
+            bot_info = self.bot.get_me()
             logger.info(f"Connected to Telegram bot: @{bot_info.username}")
-
-        except Exception as e:
-            logger.critical(f"❌ Failed to initialize TelegramClient Updater or get bot info: {e}", exc_info=True)
-            self.updater = None
-            self.dispatcher = None
-            # Propaga a exceção para que o main.py saiba que a inicialização falhou
-            raise
+        except telegram.error.TelegramError as e:
+            logger.critical(f"❌ Failed to connect to Telegram API: {e}", exc_info=True)
+            raise # Re-lança a exceção, pois a conexão é crítica
 
 
-    def start_polling(self, handler_func: Callable[[Dict[str, Any], List[Dict[str, str]]], Optional[str]]):
+    def _register_handlers(self):
+        """Registra os handlers no application do Telegram (v20+)."""
+        # CORRIGIDO: Use filters.TEXT e filters.COMMAND da nova API
+        # Use CommandHandler para comandos e MessageHandler para texto não comando
+        # O callback agora é o método handle_message da instância message_handler_instance
+
+        # Handler para comandos (mensagens que começam com /)
+        self.application.add_handler(CommandHandler("start", self.message_handler_instance.handle_message)) # Exemplo para /start
+        # Adicione outros CommandHandlers aqui para comandos específicos,
+        # ou use um MessageHandler com filters.COMMAND se seu handle_message
+        # lida com todos os comandos genericamente.
+
+        # Se seu handle_message lida com TODOS os comandos, você pode usar:
+        self.application.add_handler(MessageHandler(filters.COMMAND, self.message_handler_instance.handle_message))
+        logger.debug("✅ Command handler registered with filter filters.COMMAND")
+
+
+        # Handler para mensagens de texto que NÃO são comandos
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler_instance.handle_message))
+        logger.debug("✅ Text message handler registered with filter filters.TEXT & ~filters.COMMAND")
+
+        # TODO: Adicionar outros handlers (ex: para fotos, documentos, etc.) se necessário
+
+
+    # CORRIGIDO: Não precisamos mais do método _wrapper_message_handler
+    # O handle_message no MessageHandler agora recebe update e context diretamente
+
+
+    # CORRIGIDO: O método send_message agora usa self.bot.send_message diretamente
+    # O parse_mode padrão foi movido para a chamada real
+    def send_message(self, chat_id: Union[int, str], text: str, parse_mode: Optional[str] = None) -> None:
         """
-        Inicia o polling para receber mensagens do Telegram.
-        Registra um handler_func que será chamado para cada mensagem de texto.
-        :param handler_func: Uma função que recebe um dict da mensagem e histórico, e retorna uma string de resposta ou None.
+        Envia uma mensagem para um chat específico usando a API v20+.
+        :param chat_id: O ID do chat.
+        :param text: O texto da mensagem.
+        :param parse_mode: Modo de parse (ex: 'HTML', 'MarkdownV2'). Padrão é None.
         """
-        if self.dispatcher is None:
-            logger.error("Telegram Dispatcher is not initialized. Cannot start polling.")
-            return # Não pode iniciar sem o dispatcher
-
-        # Wrapper para converter o objeto Update/CallbackContext para um dict simples
-        # e lidar com o envio da resposta retornada pelo handler_func
-        def wrapper_handler(update, context):
-            # Verifica se a atualização contém uma mensagem de texto
-            if update.message and update.message.text:
-                message = update.message
-                message_text = message.text
-                chat_id = str(message.chat_id)
-                user_id = str(message.from_user.id) # Usamos str() para consistência com o DB
-
-                logger.debug(f"Received message from chat {chat_id}: {message_text[:50]}...")
-
-                # Constrói um dicionário simplificado da mensagem para passar para o handler
-                message_dict = {
-                    "text": message_text,
-                    "chat": {"id": chat_id},
-                    "from": {
-                        "id": user_id,
-                        "username": getattr(message.from_user, 'username', None), # Usa getattr com default None caso username não exista
-                        "first_name": getattr(message.from_user, 'first_name', None),
-                        "last_name": getattr(message.from_user, 'last_name', None)
-                    },
-                    "message_id": message.message_id # Adiciona o message_id
-                    # Adicionar outros campos importantes se necessário
-                }
-
-                # TODO: Buscar histórico de chat relevante do DB usando db_manager (opcional para o handler básico)
-                # Por enquanto, passa uma lista vazia como placeholder
-                chat_history: List[Dict[str, str]] = [] # Placeholder
-
-                try:
-                    # Chama a função handler_func (message_handler.handle_message)
-                    response_text = handler_func(message_dict, chat_history)
-
-                    # Se o handler_func retornou uma string (e não None), envia a resposta
-                    if response_text is not None:
-                        logger.debug(f"Wrapper sending response to chat {chat_id}: {response_text[:50]}...")
-                        # Usa context.bot para enviar a mensagem, é mais robusto dentro de handlers
-                        # Usa parse_mode='HTML' por padrão se a resposta não for None (pode ser alterado)
-                        try:
-                            context.bot.send_message(chat_id=chat_id, text=response_text, parse_mode='HTML') # Default para HTML
-                            logger.debug(f"Response sent successfully to chat {chat_id}.")
-                        except Exception as e:
-                             # Captura erros ao tentar enviar a mensagem de resposta
-                             logger.error(f"❌ Failed to send response message to chat {chat_id}: {e}", exc_info=True)
-                             # Tenta enviar uma mensagem de erro genérica se a original falhou
-                             try:
-                                 context.bot.send_message(chat_id=chat_id, text="Sorry, could not send the full response.", parse_mode=None)
-                             except Exception as e_fallback:
-                                 logger.error(f"❌ Failed to send fallback error message to chat {chat_id}: {e_fallback}", exc_info=True)
-
-
-                    else:
-                        # Se handler_func retornou None, assume que a resposta já foi enviada diretamente
-                        logger.debug(f"Handler returned None. Assuming response was sent directly by message handler for chat {chat_id}.")
-
-                except Exception as e:
-                    # Captura exceções que ocorrem DENTRO do handler_func (message_handler.handle_message)
-                    logger.error(f"❌ Error processing message with handler_func: {e}", exc_info=True)
-                    # Envia uma mensagem de erro genérica para o usuário
-                    try:
-                        context.bot.send_message(chat_id=chat_id, text="Sorry, an internal error occurred while processing your message.", parse_mode=None)
-                    except Exception as e_fallback:
-                         logger.error(f"❌ Failed to send error message to chat {chat_id} after handler failure: {e_fallback}", exc_info=True)
-
-            # Ignora outros tipos de updates (não text messages)
-            # else:
-            #     logger.debug("Received non-text update, ignoring.")
-
-
-        # Registra o wrapper_handler para lidar com mensagens de texto
-        # MessageHandler usa Filters.text para filtrar apenas mensagens de texto
-        # O objeto MessageHandler do python-telegram-bot chama a callback function (wrapper_handler)
-        text_message_handler = MessageHandler(Filters.text & ~Filters.command, wrapper_handler) # Lida com texto que NÃO é comando
-        command_handler = MessageHandler(Filters.command, wrapper_handler) # Lida com comandos (mensagens que começam com /)
-
-        # Adiciona os handlers ao dispatcher
-        # A ordem importa: comandos antes de texto geral, se houver sobreposição.
-        # Nosso wrapper já lida com comandos vs texto, então Filters.command
-        # garante que só mensagens / chegam ao nosso wrapper com Filters.command=True
-        # e o resto com Filters.text.
-        # A ordem de registro no dispatcher determina qual handler é tentado primeiro.
-        # Vamos registrar o handler geral de texto/comandos primeiro, pois nosso wrapper
-        # já contém a lógica de roteamento baseada em text.startswith('/').
-        self.dispatcher.add_handler(MessageHandler(Filters.text, wrapper_handler)) # Registra o wrapper para TODAS as mensagens de texto
-
-
-        logger.debug("✅ Main message handler registered: wrapper_handler with filter filters.Filters.text")
-
-
-        # Inicia o polling. O idle() faz o bot ficar rodando até ser interrompido (ex: CTRL+C)
-        # run_polling já inicia o thread e bloqueia.
-        self.updater.start_polling()
-        # Opcional: self.updater.idle() # Mantém o bot rodando
-
-    def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = 'HTML') -> None:
-        """
-        Envia uma mensagem para um chat específico.
-        :param chat_id: O ID do chat de destino (string).
-        :param text: O texto da mensagem a ser enviado.
-        :param parse_mode: O modo de parse (ex: 'HTML', 'MarkdownV2', None). Padrão 'HTML'.
-        """
-        if self.updater is None or self.updater.bot is None:
-            logger.error("Telegram bot is not initialized. Cannot send message.")
-            return # Não pode enviar se o bot não está pronto
-
         try:
-            logger.debug(f"Attempting to send message to chat {chat_id}: {text[:50]}...")
-            self.updater.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-            logger.debug(f"Message sent successfully to chat {chat_id}.")
-        except Exception as e:
-            # Loga o erro ao enviar a mensagem
+            logger.debug(f"Attempting to send message to chat {chat_id}: {text[:50]}...") # Loga o início da mensagem
+            # CORRIGIDO: Use self.bot.send_message diretamente
+            # O parse_mode padrão pode ser definido aqui ou na chamada
+            self.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            # Não logamos sucesso aqui para evitar logs excessivos, o wrapper já loga (se ainda existisse)
+            # logger.debug(f"Message sent successfully to chat {chat_id}.")
+        except telegram.error.TelegramError as e:
             logger.error(f"❌ Failed to send message to chat {chat_id}: {e}", exc_info=True)
-            # Note: Não tentamos enviar uma mensagem de erro de fallback aqui para evitar loops de erro.
+        except Exception as e:
+            logger.error(f"❌ An unexpected error occurred while sending message to chat {chat_id}: {e}", exc_info=True)
 
-    # TODO: Adicionar outros métodos úteis, como send_photo, send_document, etc.
-    # TODO: Implementar métodos stop_polling() ou is_running() se necessário para o main loop.
+
+    # CORRIGIDO: O método start_listening agora usa self.application.run_polling()
+    def start_listening(self):
+        """Inicia o polling para receber mensagens (v20+)."""
+        logger.info("Starting Telegram listener (polling).")
+        # --- Adiciona tratamento de erro para Conflict ---
+        try:
+            # CORRIGIDO: Use run_polling() na v20+
+            # run_polling é bloqueante e mantém o bot rodando
+            self.application.run_polling()
+            logger.info("✅ Telegram listener started.")
+            # Não precisamos de updater.idle() ou application.idle() explicitamente
+            # se run_polling() for a última coisa no thread principal.
+        except Conflict as e:
+             logger.critical(f"❌ Conflict error during polling: {e}. Ensure only one bot instance is running with this token.", exc_info=True)
+             # Aqui você pode adicionar lógica para tentar reiniciar após um tempo,
+             # mas a causa raiz (multiplas instâncias) precisa ser resolvida manualmente.
+             # Por enquanto, apenas logamos o erro crítico.
+        except Exception as e:
+             logger.critical(f"❌ An unexpected error occurred while starting Telegram listener: {e}", exc_info=True)
+             raise # Re-lança para que o processo principal saiba que houve uma falha crítica
+
+    # CORRIGIDO: Adicionar um método stop_listening se precisar parar o bot
+    def stop_listening(self):
+        """Para o polling (v20+)."""
+        logger.info("Stopping Telegram listener.")
+        self.application.stop_running()
+        logger.info("Telegram listener stopped.")
+
