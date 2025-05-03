@@ -7,8 +7,12 @@ openai              # Cliente para a API da OpenAI (se estiver usando)
 python-telegram-bot==13.15 # <-- Força esta versão específica da biblioteca do Telegram
 telegram            # Dependência de python-telegram-bot (geralmente instalada automaticamente)
 pycoingecko         # Cliente para a API da CoinGecko
-apscheduler         # Agendador de tarefas em segundo plano
-pytz                # Para lidar com fusos horários no scheduler
+
+# Fixando versões de APScheduler e pytz para tentar resolver o erro 'normalize'
+# A versão 3.9.1 de APScheduler é uma versão estável anterior a algumas mudanças significativas.
+# pytz é necessário para fusos horários.
+apscheduler==3.9.1
+pytz==2023.3.3 # Fixando uma versão específica de pytz também
 
 # Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
 pip
