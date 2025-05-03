@@ -68,7 +68,7 @@ logger.info("✅ CoinGeckoClient instance initialized and ready.")
 # Inicializamos TelegramClient primeiro e depois passamos a instância do MessageHandler.
 
 # Inicialização do TelegramClient (passando None temporariamente para message_handler_instance)
-# CORRIGIDO: Usando o nome de argumento correto 'bot_token'
+# CORRIGIDO: Usando o nome de argumento correto 'bot_token' em vez de 'token'
 telegram_client = TelegramClient(bot_token=TELEGRAM_BOT_TOKEN, message_handler_instance=None)
 logger.info("✅ TelegramClient instance initialized.")
 
