@@ -3,7 +3,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, Float, D
 from sqlalchemy.orm import sessionmaker, relationship, scoped_session, joinedload
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime # <-- Importar datetime aqui
-from typing import Optional, List # <-- CORRIGIDO: Importa List também
+from typing import Optional, List # <-- Importa List também
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class DatabaseManager:
             logger.error(f"Error getting or creating user {telegram_id}: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     def log_message(self, telegram_id: str, role: str, content: str, chat_id: str, message_telegram_id: Optional[int] = None) -> None:
@@ -143,7 +143,7 @@ class DatabaseManager:
             logger.error(f"Error logging message for user {telegram_id}: {e}", exc_info=True)
             # Não relança, pois falha no log não deve parar o bot
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     def add_or_update_preference(self, telegram_id: str, symbol: str, is_favorite: Optional[bool] = None, high_alert: Optional[float] = None, low_alert: Optional[float] = None):
@@ -214,7 +214,7 @@ class DatabaseManager:
             logger.error(f"Error adding or updating preference for user {telegram_id}, symbol {symbol.upper()}: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     def get_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, is_favorite: Optional[bool] = None, with_alerts: bool = False) -> List[CryptoPreference]: # Usando type hint para a classe dummy
@@ -253,7 +253,7 @@ class DatabaseManager:
             logger.error(f"Error getting preferences for user {telegram_id}: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     def clear_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, clear_favorites: bool = True, clear_alerts: bool = True) -> bool:
@@ -306,7 +306,7 @@ class DatabaseManager:
             logger.error(f"Error clearing preferences for user {telegram_id}, symbol: {symbol.upper() if symbol else 'all'}: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     # Método usado pelo PriceMonitor para obter todas as preferências com alertas configurados
@@ -332,7 +332,7 @@ class DatabaseManager:
             logger.error(f"Error getting all user preferences for monitoring: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
 
     def update_alert_triggered_at(self, preference_id: int, timestamp: datetime, triggered_price: float) -> bool:
@@ -357,5 +357,28 @@ class DatabaseManager:
             logger.error(f"Error updating last_alert_triggered_at for preference ID {preference_id}: {e}", exc_info=True)
             raise # Re-lança a exceção
         finally:
-            # CORRIGIDO: Chamar remove() no objeto scoped_session, não na sessão
+            # CORRIGIDO: Chamar remove() no objeto scoped_session
             self.SessionLocal.remove()
+
+    # --- NOVO MÉTODO: Obter todos os IDs de usuário ---
+    def get_all_user_telegram_ids(self) -> List[str]:
+        """
+        Busca os IDs do Telegram de todos os usuários registrados no banco de dados.
+        Retorna uma lista de strings (IDs do Telegram).
+        """
+        session = self.get_session()
+        try:
+            # Consulta a coluna telegram_id da tabela User
+            user_ids = session.query(User.telegram_id).all()
+            # O resultado de all() é uma lista de tuplas (telegram_id,),
+            # usamos uma list comprehension para extrair apenas os IDs.
+            telegram_ids = [uid[0] for uid in user_ids]
+            logger.debug(f"Found {len(telegram_ids)} user Telegram IDs in DB.")
+            return telegram_ids
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error getting all user Telegram IDs: {e}", exc_info=True)
+            # Retorna uma lista vazia em caso de erro para que o broadcast não quebre
+            return []
+        finally:
+            self.SessionLocal.remove() # Fecha a sessão
