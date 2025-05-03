@@ -1,525 +1,724 @@
 import logging
-import os
-import unicodedata
-import re
-from typing import Dict, Any, List, Optional, Type, Union
-from datetime import datetime # <-- ADICIONADO: Importa o módulo datetime
+from typing import Dict, Any, Optional, List, Callable, Tuple, Union # Importa Union
+import re # Importa o módulo re para usar expressões regulares
+import os # Importa o módulo os para acessar variáveis de ambiente
+import time # Importa time para usar sleep
 
-# Importar as classes dependentes para type hinting (MANTENHA ESTE BLOCO)
-# Isso ajuda ferramentas de análise de código (como linters e IDEs)
-# a entender as dependências sem precisar importar os módulos reais aqui,
-# evitando problemas de dependência circular, embora neste caso específico
-# as dependências reais são importadas em main.py e passadas para o handler.
-# Manter as classes dummy com type hints corretos é uma boa prática.
-class TelegramClient:
-    def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = 'HTML') -> None: pass
+# Importar as classes dependentes para type hinting
+# from database_manager import DatabaseManager # Não precisamos importar a classe real aqui para type hinting
+# from telegram_client import TelegramClient   # Não precisamos importar a classe real aqui para type hinting
+# from coingecko_client import CoinGeckoClient # Não precisamos importar a classe real aqui para type hinting
 
+# Adiciona classes dummy para type hinting, conforme a estrutura esperada
 class DatabaseManager:
     def get_or_create_user(self, telegram_id: str, username: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None): pass
     def log_message(self, telegram_id: str, role: str, content: str, chat_id: str, message_telegram_id: Optional[int] = None) -> None: pass
     def add_or_update_preference(self, telegram_id: str, symbol: str, is_favorite: Optional[bool] = None, high_alert: Optional[float] = None, low_alert: Optional[float] = None): pass
     def get_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, is_favorite: Optional[bool] = None, with_alerts: bool = False) -> List[Any]: pass
     def clear_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, clear_favorites: bool = True, clear_alerts: bool = True) -> bool: pass
-    # Adicionado método para obter preferências para monitoramento, usado pelo PriceMonitor
-    def get_all_user_preferences_for_monitoring(self) -> List[Any]: pass
-    # Atualizado: Usa datetime na anotação de tipo, que agora está importado
-    def update_alert_triggered_at(self, preference_id: int, timestamp: datetime, triggered_price: float) -> bool: pass # Importa datetime para type hinting
+    def get_all_user_preferences_for_monitoring(self) -> List[Any]: pass # Método usado pelo PriceMonitor
+    def update_alert_triggered_at(self, preference_id: int, timestamp: datetime, triggered_price: float) -> bool: pass
+    # Adiciona type hint para o novo método
+    def get_all_user_telegram_ids(self) -> List[str]: pass
 
+
+class TelegramClient:
+    # Note: send_message na classe dummy não precisa ser idêntico ao real
+    # A implementação real está em telegram_client.py e lida com parse_mode
+    def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = 'HTML') -> None: pass
 
 class PriceClientInterface:
     def is_ready(self) -> bool: pass
     def is_valid_symbol(self, symbol: str) -> bool: pass
     def get_price(self, symbol: str, currency: Union[str, List[str]] = 'usd') -> Optional[Dict[str, Optional[float]]]: pass
     def get_multiple_prices(self, symbols: List[str], currency: Union[str, List[str]] = 'usd') -> Dict[str, Optional[Dict[str, Optional[float]]]]: pass
-
-class OpenAIClient: pass
-class IntentRecognizer: pass
-# --- Fim do bloco de classes dummy para type hinting ---
+    # Adiciona type hint para o novo método
+    def get_coins_list_with_price(self, vs_currency: str = 'usd', order: str = 'market_cap_desc', per_page: int = 100, page: int = 1) -> Optional[List[Dict[str, Any]]]: pass
 
 
 logger = logging.getLogger(__name__)
 
+# NÍVEL DEBUG PARA DIAGNOSTICO - Mantenha assim por enquanto
 if not logger.handlers:
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
 
-class MessageHandler:
-    def __init__(self,
-                 telegram_client: TelegramClient,
-                 db_manager: DatabaseManager,
-                 price_client: Optional[PriceClientInterface] = None,
-                 openai_client: Optional[OpenAIClient] = None,
-                 intent_recognizer: Optional[IntentRecognizer] = None,
-                ):
 
-        if telegram_client is None or db_manager is None:
-             logger.critical("❌ MessageHandler requires valid TelegramClient and DatabaseManager instances.")
+class MessageHandler:
+    # Ajustado type hints para usar as classes dummy definidas acima
+    def __init__(self, db_manager: DatabaseManager, price_client: PriceClientInterface, telegram_client: TelegramClient):
+        """
+        Inicializa o MessageHandler com as dependências.
+        :param db_manager: Instância do DatabaseManager.
+        :param price_client: Instância do PriceClient (ex: CoinGeckoClient).
+        :param telegram_client: Instância do TelegramClient.
+        """
+        if db_manager is None or price_client is None or telegram_client is None:
+             logger.critical("❌ MessageHandler requires valid instances of DatabaseManager, PriceClient, and TelegramClient.")
              raise ValueError("Missing critical dependencies for MessageHandler")
 
-        self.telegram_client = telegram_client
-        self.db_manager = db_manager
-        self.price_client = price_client
-        self.openai_client = openai_client
-        self.intent_recognizer = intent_recognizer
+        # Guarda as instâncias REAIS passadas de main.py
+        self.db_manager: DatabaseManager = db_manager
+        self.price_client: PriceClientInterface = price_client
+        self.telegram_client: TelegramClient = telegram_client
 
-        # --- Mapeamento de Comandos (Usando nomes normalizados como chaves) ---
-        # As chaves devem estar em minúsculas E sem acentos/caracteres especiais (normalizadas)
-        # Os valores são os nomes internos dos comandos
-        self._command_map = {
-            'start': 'start',
-            'iniciar': 'start',
+        # Obter o ID do administrador do Telegram das variáveis de ambiente
+        # Usaremos este ID para verificar quem pode enviar broadcasts
+        self.admin_telegram_id = os.getenv('TELEGRAM_ADMIN_ID')
+        if not self.admin_telegram_id:
+             logger.warning("⚠️ TELEGRAM_ADMIN_ID environment variable not set. Broadcast command will be disabled.")
+        else:
+             logger.info(f"Admin Telegram ID set: {self.admin_telegram_id}")
 
-            'help': 'help',
-            'ajuda': 'help',
 
-            'price': 'price',
-            'preco': 'price', # Chave normalizada para 'preço'
-
-            'alert': 'alert',
-            'alerta': 'alert', # Chave normalizada para 'alerta'
-
-            'myalerts': 'myalerts',
-            'meusalertas': 'myalerts', # Chave normalizada para 'meusalertas'
-
-            'clearalerts': 'clearalerts',
-            'limparalertas': 'clearalerts', # Chave normalizada para 'limparalertas'
-
-            'favorite': 'favorite',
-            'favorito': 'favorite', # Chave normalizada para 'favorito'
-            'favoritar': 'favorite', # Chave normalizada para 'favoritar'
-
-            'myfavorites': 'myfavorites',
-            'meusfavoritos': 'myfavorites', # Chave normalizada para 'meusfavoritos'
-
-            'clearnotifications': 'clearnotifications',
-            'limparnotificacoes': 'clearnotificacoes', # Chave normalizada para 'limparnotificacoes'
-            'limpartudo': 'clearnotifications', # Chave normalizada para 'limpartudo'
-
-            # TODO: Adicionar mapeamentos normalizados para outros comandos conforme forem implementados
+        # Mapeamento de comandos e seus aliases para os métodos de tratamento
+        # Chave: comando interno, Valor: (função de tratamento, [aliases])
+        self.commands: Dict[str, Tuple[Callable, List[str]]] = {
+            "start": (self.handle_start, ["iniciar", "começar"]),
+            "help": (self.handle_help, ["ajuda", "comandos"]),
+            "price": (self.handle_price, ["preço", "cotacao"]),
+            "favorite": (self.handle_favorite, ["favoritar", "fav"]), # Novo comando para favoritar
+            "unfavorite": (self.handle_unfavorite, ["desfavoritar", "unfav"]), # Novo comando para desfavoritar
+            "myfavorites": (self.handle_my_favorites, ["meusfavoritos", "favs"]), # Novo comando para listar favoritos
+            "alert": (self.handle_alert, ["alerta"]), # Comando para definir alerta de preço
+            "myalerts": (self.handle_my_alerts, ["meusalertas"]), # Comando para listar alertas
+            "clearalerts": (self.handle_clear_alerts, ["limparalertas"]), # Comando para limpar alertas
+            # --- NOVO COMANDO: Listar moedas ---
+            "listcoins": (self.handle_list_coins, ["listar", "topmoedas", "moedas"]), # Comando para listar moedas
+            # --- NOVO COMANDO: Broadcast (apenas para admin) ---
+            "broadcast": (self.handle_broadcast, ["transmitir", "enviartodos"]), # Comando para broadcast
         }
-        # --- Fim do Mapeamento de Comandos ---
 
-        logger.info("MessageHandler instance initialized.")
+        # Mapeamento reverso de aliases para comandos internos (para roteamento rápido)
+        self._alias_to_command: Dict[str, str] = {}
+        for command, (_, aliases) in self.commands.items():
+            # Adiciona o comando interno como um alias de si mesmo
+            self._alias_to_command[command.lower()] = command
+            for alias in aliases:
+                self._alias_to_command[alias.lower()] = command
 
-    # --- Função auxiliar para normalizar strings ---
-    def _normalize_string(self, text: str) -> str:
+
+    def handle_message(self, update: Any, context: Any) -> None: # Assinatura do handler na v20+
         """
-        Remove acentos e caracteres especiais de uma string, converte para minúsculas.
-        Útil para comparar comandos ou aliases de forma insensível a acentos/capitalização.
+        Processa uma mensagem recebida do Telegram (v20+).
+        Identifica comandos, registra a mensagem e roteia para o handler apropriado.
+        Não retorna string, handlers enviam respostas diretamente.
         """
-        # Converte para o formato de decomposição NFKD (separa base e diacríticos)
-        nfkd_form = unicodedata.normalize('NFKD', text)
-        # Remove os caracteres combinantes (diacríticos) usando regex
-        # \u0300-\u036f é o intervalo Unicode comum para diacríticos combinantes
-        # O re.compile pré-compila a regex para eficiência se a função for chamada muitas vezes
-        if not hasattr(self, '_re_combine_chars'):
-             self._re_combine_chars = re.compile(r'[\u0300-\u036f]', re.UNICODE)
-        return self._re_combine_chars.sub('', nfkd_form).lower() # Remove diacríticos e converte para minúsculas
+        # Na v20+, update e context são passados diretamente para o handler
+        message = update.effective_message
+        if not message:
+            logger.warning("Received update without an effective message.")
+            return # Ignora updates sem mensagem efetiva
 
-    def handle_message(self, message: Dict[str, Any], chat_history: List[Dict[str, str]]) -> Optional[str]:
-        """
-        Processa uma mensagem recebida do Telegram.
-        """
-        user_id = message.get("from", {}).get("id")
-        chat_id = message.get("chat", {}).get("id")
-        message_text = message.get("text")
-
-        logger.debug(f"handle_message received - Raw message_dict: {message}")
-        logger.debug(f"handle_message received - message_text: '{message_text}' (Type: {type(message_text)})")
-        starts_with_slash = message_text.startswith('/') if isinstance(message_text, str) else False
-        logger.debug(f"handle_message received - message_text starts with '/': {starts_with_slash}")
-
-        if not user_id or not chat_id or not message_text:
-            logger.warning("Received message with missing user_id, chat_id or text. Ignoring.")
-            return None
-
-        logger.info(f"Received message from user {user_id} in chat {chat_id}: {message_text[:100]}...")
-
-        user = self.db_manager.get_or_create_user(telegram_id=str(user_id), username=message.get("from",{}).get("username"), first_name=message.get("from",{}).get("first_name"), last_name=message.get("from",{}).get("last_name"))
-        if user:
-             logger.debug(f"Processing message for user {user.telegram_id}.")
-             content_to_log = str(message_text) if message_text is not None else "None"
-             message_tele_id = message.get("message_id")
-             self.db_manager.log_message(telegram_id=str(user_id), role='user', content=content_to_log, chat_id=chat_id, message_telegram_id=message_tele_id)
-             logger.debug(f"Logged user message for user {user.telegram_id} in chat {chat_id}.")
-        else:
-             logger.error(f"Failed to get or create user for telegram_id {user_id}. Cannot log message or process commands related to user/DB.")
-             try:
-                 self.telegram_client.send_message(chat_id, "Desculpe, não consegui identificar você ou acessar seus dados. Por favor, tente novamente.")
-             except Exception as e:
-                 logger.error(f"Failed to send error message to chat {chat_id}: {e}", exc_info=True)
-             return None
-
-        if starts_with_slash:
-            parts = message_text.split(' ', 1)
-            command_alias_with_slash = parts[0].lower()
-            command_alias = command_alias_with_slash[1:]
-
-            # --- FIX: Define args with default empty string before potential assignment ---
-            args = '' # <-- DEFINE args AQUI COM VALOR PADRÃO
-
-            # Assign args conditionally if there are more parts
-            if len(parts) > 1:
-                 args = parts[1] # <-- ATRIBUI AQUI APENAS SE EXISTIR
+        message_text = message.text
+        user_id = str(message.from_user.id) # Garante que user_id é string
+        chat_id = str(message.chat_id)     # Garante que chat_id é string
+        message_telegram_id = message.message_id
+        username = message.from_user.username
+        first_name = message.from_user.first_name
+        last_name = message.from_user.last_name
 
 
-            logger.info(f"Received command alias: {command_alias_with_slash} with args: '{args}'")
+        logger.debug(f"handle_message received - message_text: '{message_text}' (Type: {type(message_text)}) from user {user_id} in chat {chat_id}")
 
-            # --- Normaliza o alias do comando ANTES de buscar no mapeamento ---
-            normalized_command_alias = self._normalize_string(command_alias) # <-- APLICA A NORMALIZAÇÃO
-            logger.debug(f"Normalized command alias '{command_alias}' to '{normalized_command_alias}'.")
+        if not message_text:
+            logger.warning("Received message with empty text. Ignoring.")
+            return None # Ignora mensagens sem texto
 
-            # Resolve o alias NORMALIZADO para o nome do comando interno
-            internal_command = self._command_map.get(normalized_command_alias, 'unknown') # <-- USA O ALIAS NORMALIZADO
-            logger.debug(f"Resolved normalized alias '{normalized_command_alias}' to internal command '{internal_command}'.")
-
-            response = self.route_command(internal_command, user, args, chat_id)
-
-            if response is not None:
-                 logger.debug(f"handle_message returning response string: {response[:100]}...")
-            else:
-                 logger.debug("handle_message returning None (response sent directly).")
-            return response
-
-        else:
-            logger.debug("Received free chat message.")
-            return "Hmm, isso não parece um comando. Use /help ou /ajuda para ver o que posso fazer."
-
-    def route_command(self, internal_command: str, user: Dict[str, Any], args: str, chat_id: str) -> Optional[str]:
-        """
-        Roteia e lida com comandos internos.
-        """
-        # args é garantido ser uma string aqui (vazia se não houveram argumentos)
-        logger.debug(f"Routing internal command: '{internal_command}' with args: '{args}'")
-        user_telegram_id = user.telegram_id
-
-        if internal_command == 'start':
-            user_display_name = user.first_name or user.username or 'lá'
-            welcome_message = f"Olá, {user_display_name}! Eu sou seu Bot de Alertas e Informações de Criptomoedas."
-            welcome_message += " Use /help ou /ajuda para ver o que posso fazer."
-            logger.debug(f"Route: start -> Returning: {welcome_message[:50]}...")
-            return welcome_message
-
-        elif internal_command == 'help':
-            help_message = self._get_help_message()
-            logger.debug(f"Route: help -> Sending help message directly to chat {chat_id}.")
-            try:
-                 # Atualizado: Envia mensagem de ajuda sem parse_mode para evitar problemas com caracteres
-                 self.telegram_client.send_message(chat_id, help_message, parse_mode=None) # <-- parse_mode=None
-                 logger.debug(f"Route: help -> Help message sent successfully.")
-                 return None
-            except Exception as e:
-                 logger.error(f"Error sending help message to chat {chat_id}: {e}", exc_info=True)
-                 return "Ocorreu um erro ao enviar a mensagem de ajuda."
-
-        elif internal_command == 'price':
-            logger.debug("Route: price")
-            if self.price_client is None or not hasattr(self.price_client, 'is_ready') or not self.price_client.is_ready():
-                 return "Desculpe, o serviço de preços está indisponível no momento, pois a conexão com a fonte de dados de preço não pôde ser estabelecida."
-
-            symbol = args.strip().upper()
-            if not symbol:
-                return "Por favor, especifique um símbolo de criptomoeda (ex: /price BTC ou /preco BTC)."
-
-            try:
-                 logger.debug(f"Attempting to get price for symbol '{symbol}' in USD and BRL using price client.")
-                 price_data = self.price_client.get_price(symbol, currency=['usd', 'brl'])
-
-                 price_usd = price_data.get('price_usd') if price_data else None
-                 price_brl = price_data.get('price_brl') if price_data else None
-                 change_percent_usd = price_data.get('price_change_percent_usd') if price_data else None
-                 change_percent_brl = price_data.get('price_change_percent_brl') if price_data else None
-
-                 if price_usd is not None or price_brl is not None:
-                      message_lines = [f"Preço atual de {symbol}:"]
-
-                      if price_usd is not None:
-                          usd_line = f"🇺🇸 USD: ${price_usd:.8f}"
-                          if change_percent_usd is not None:
-                               change_emoji_usd = "📈" if change_percent_usd >= 0 else "📉"
-                               usd_line += f" ({change_emoji_usd}{change_percent_usd:.2f}%)"
-                          message_lines.append(usd_line)
-                      elif price_data is not None and 'price_usd' in price_data and price_usd is None:
-                           message_lines.append("🇺🇸 USD: N/D (Dados da API indisponíveis)")
-
-                      if price_brl is not None:
-                           brl_line = f"🇧🇷 BRL: R${price_brl:.8f}"
-                           if change_percent_brl is not None:
-                                change_emoji_brl = "📈" if change_percent_brl >= 0 else "📉"
-                                brl_line += f" ({change_emoji_brl}{change_percent_brl:.2f}%)"
-                           message_lines.append(brl_line)
-                      elif price_data is not None and 'price_brl' in price_data and price_brl is None:
-                            message_lines.append("🇧🇷 BRL: N/D (Dados da API indisponíveis)")
-
-                      if len(message_lines) > 1:
-                          message = "\n".join(message_lines)
-                          logger.debug(f"Route: price -> Returning price message for {symbol}: {message[:100]}...")
-                          return message
-                      else:
-                           logger.warning(f"Fetched data for symbol {symbol}, but both USD and BRL prices are None. Response: {price_data}")
-                           if hasattr(self.price_client, 'is_valid_symbol') and self.price_client.is_valid_symbol(symbol):
-                               logger.error(f"Price client reported symbol '{symbol}' as valid but returned no price data for USD/BRL.")
-                               return f"Não foi possível obter o preço para {symbol} em USD ou BRL no momento."
-                           else:
-                               logger.warning(f"Symbol '{symbol}' deemed invalid or validation failed.")
-                               return f"Símbolo '{symbol}' não encontrado ou inválido na fonte de dados de preço."
-                 else:
-                      logger.warning(f"No price data found for symbol {symbol} from price client. Response: {price_data}")
-                      if hasattr(self.price_client, 'is_valid_symbol') and self.price_client.is_valid_symbol(symbol):
-                           logger.error(f"Price client reported symbol '{symbol}' as valid but returned no data at all.")
-                           return f"Não foi possível obter o preço para {symbol} no momento."
-                      else:
-                           logger.warning(f"Símbolo '{symbol}' não encontrado ou inválido na fonte de dados de preço.")
-                           return f"Símbolo '{symbol}' não encontrado ou inválido na fonte de dados de preço."
-            except Exception as e:
-                 logger.error(f"Error handling price command for {symbol}: {e}", exc_info=True)
-                 return f"Ocorreu um erro ao buscar o preço para {symbol}. Tente novamente mais tarde."
-
-
-        elif internal_command == 'alert':
-             logger.debug("Route: alert")
-             if self.price_client is None or not hasattr(self.price_client, 'is_ready') or not self.price_client.is_ready():
-                  return "Desculpe, a funcionalidade de definir alertas de preço está indisponível no momento, pois a conexão com a fonte de dados de preço não pôde ser estabelecida."
-
-             parts = args.split(' ')
-             if len(parts) < 3:
-                  logger.warning(f"Alert command received with insufficient arguments: '{args}'")
-                  return "Formato do comando /alert inválido. Use /alert <SIMBOLO> high/low/alta/baixa <PRECO>"
-
-             symbol_arg = parts[0].strip().upper()
-             alert_type_input = parts[1].strip().lower()
-             price_str = parts[2].strip()
-
-             # 1. Validar o tipo de alerta (aceita high, low, alta, baixa)
-             if alert_type_input not in ['high', 'low', 'alta', 'baixa']:
-                  logger.warning(f"Alert command received with invalid alert type: '{alert_type_input}'")
-                  return "Tipo de alerta inválido. Use 'high', 'low', 'alta' ou 'baixa'."
-
-             # 2. Converter o tipo de alerta para 'high' ou 'low' para uso interno
-             if alert_type_input == 'alta':
-                  alert_type = 'high'
-             elif alert_type_input == 'baixa':
-                  alert_type = 'low'
+        # Loga a mensagem recebida no banco de dados (opcional, dependendo da implementação de log)
+        # Garante que o usuário existe antes de tentar logar a mensagem
+        try:
+             # get_or_create_user agora lida com a sessão internamente
+             user = self.db_manager.get_or_create_user(telegram_id=user_id, username=username, first_name=first_name, last_name=last_name)
+             if user:
+                  # TODO: Implementar log_message para salvar no DB se a tabela existir
+                  # self.db_manager.log_message(user_id, "user", message_text, chat_id, message_telegram_id)
+                  logger.debug(f"Logged user message for user {user_id} in chat {chat_id}.")
              else:
-                  alert_type = alert_type_input
+                  logger.error(f"Could not get or create user {user_id}. Cannot log message.")
 
-             # 3. Validar se o símbolo é suportado pelo cliente de preço
-             if not hasattr(self.price_client, 'is_valid_symbol') or not self.price_client.is_valid_symbol(symbol_arg):
-                  logger.warning(f"Alert command received with invalid symbol: '{symbol_arg}'")
-                  return f"Símbolo '{symbol_arg}' não encontrado ou inválido na fonte de dados de preço."
-
-             # 4. Validar e converter o preço
-             try:
-                 price_value = float(price_str)
-                 if price_value <= 0:
-                      logger.warning(f"Alert command received with non-positive price: {price_value}")
-                      return "O preço do alerta deve ser um número positivo."
-             except ValueError:
-                 logger.warning(f"Alert command received with non-numeric price: '{price_str}'")
-                 return "Preço do alerta inválido. Por favor, use um número válido (ex: 0.5, 70000.0)."
-             except Exception as e:
-                  logger.error(f"Unexpected error validating price '{price_str}': {e}", exc_info=True)
-                  return "Ocorreu um erro ao validar o preço. Por favor, tente novamente."
-
-             # 5. Salvar o alerta no banco de dados
-             try:
-                 if alert_type == 'high':
-                     success_pref = self.db_manager.add_or_update_preference(
-                         user_telegram_id,
-                         symbol_arg,
-                         high_alert=price_value,
-                         low_alert=None,
-                         is_favorite=None
-                     )
-                     alert_message = f"✅ Alerta de {alert_type_input.upper()} definido para {symbol_arg} em ${price_value:.8f}."
-
-                 elif alert_type == 'low':
-                      success_pref = self.db_manager.add_or_update_preference(
-                         user_telegram_id,
-                         symbol_arg,
-                         low_alert=price_value,
-                         high_alert=None,
-                         is_favorite=None
-                     )
-                      alert_message = f"✅ Alerta de {alert_type_input.upper()} definido para {symbol_arg} em ${price_value:.8f}."
-
-                 if success_pref:
-                      logger.debug(f"Route: alert -> Alert saved/updated for user {user_telegram_id}, symbol {symbol_arg}, type {alert_type} (input: {alert_type_input}), price {price_value}. Preference ID: {getattr(success_pref, 'id', 'N/A')}")
-                      return alert_message
-                 else:
-                      logger.error(f"Route: alert -> Failed to save alert for user {user_telegram_id}, symbol {symbol_arg}. DB operation failed.")
-                      return f"❌ Não foi possível definir o alerta para {symbol_arg} no momento."
-             except Exception as e:
-                  logger.error(f"Error handling alert command for user {user_telegram_id}, symbol {symbol_arg}, type {alert_type_input}, price {price_value}: {e}", exc_info=True)
-                  return f"❌ Ocorreu um erro inesperado ao definir o alerta para {symbol_arg}. Tente novamente mais tarde."
-
-        elif internal_command == 'myalerts':
-            logger.debug("Route: myalerts")
-            try:
-                 # get_user_crypto_preferences(with_alerts=True) deve retornar apenas preferências com alertas.
-                 # Se ele retornar outras (como visto nos logs), a lógica abaixo lida com isso.
-                 user_preferences_with_alerts = self.db_manager.get_user_crypto_preferences(user_telegram_id, with_alerts=True)
-                 logger.debug(f"DB returned {len(user_preferences_with_alerts)} preferences with alerts.")
-
-                 if not user_preferences_with_alerts:
-                      logger.debug("Route: myalerts -> No alerts found for user.")
-                      return "Você não tem alertas de preço configurados."
-
-                 response_lines = ["🔔 Seus alertas de preço configurados:"]
-                 valid_alerts_found = False # Flag para verificar se pelo menos um alerta válido foi formatado
-
-                 for pref in user_preferences_with_alerts:
-                      logger.debug(f"Processing preference object for /myalerts: {pref}")
-                      alert_info = []
-                      if pref.high_alert is not None:
-                           logger.debug(f"  - High alert found: {pref.high_alert}")
-                           alert_info.append(f"Alta > ${pref.high_alert:.8f}")
-                      if pref.low_alert is not None:
-                           logger.debug(f"  - Low alert found: {pref.low_alert}")
-                           alert_info.append(f"Baixa < ${pref.low_alert:.8f}")
-
-                      # Só adiciona a linha se a preferência realmente tem alertas
-                      if alert_info:
-                           line = f"- {pref.symbol}: {' e '.join(alert_info)}"
-                           logger.debug(f"  - Formatted alert line: {line}")
-                           response_lines.append(line)
-                           valid_alerts_found = True # Marca que encontrou pelo menos um alerta válido
-                      else:
-                           # Este warning indica que get_user_crypto_preferences(with_alerts=True) retornou algo inesperado
-                           logger.warning(f"Preference {getattr(pref, 'id', 'N/A')} for user {user_telegram_id} returned by get_user_crypto_preferences(with_alerts=True) has no alerts despite filter. Skipping.")
-
-                 # Se nenhuma linha de alerta válida foi adicionada (apenas o cabeçalho está na lista)
-                 if not valid_alerts_found:
-                      logger.debug("Route: myalerts -> After processing, no valid alert lines were added.")
-                      # Isso pode acontecer se a query retornou preferências, mas nenhuma delas tinha high_alert ou low_alert.
-                      return "Você não tem alertas de preço configurados."
+        except Exception as e:
+             logger.error(f"Error during user get/create or message logging for user {user_id}: {e}", exc_info=True)
+             # Continua processando a mensagem mesmo que o log falhe
 
 
-                 response = "\n".join(response_lines)
-                 logger.debug(f"Route: myalerts -> Returning: {response[:100]}...")
+        # Verifica se a mensagem é um comando (começa com '/')
+        logger.debug(f"handle_message received - message_text starts with '/': {message_text.startswith('/')}")
+        if message_text.startswith('/'):
+            # Remove a barra inicial e divide o comando e argumentos
+            parts = message_text[1:].split(maxsplit=1)
+            command_alias = parts[0].lower() # Comando/alias em minúsculas
+            command_args = parts[1] if len(parts) > 1 else "" # Argumentos como uma única string
 
-                 # --- CORREÇÃO: Enviar mensagem sem parse_mode para evitar BadRequest ---
-                 # O wrapper_handler em telegram_client.py tem parse_mode='HTML' como padrão.
-                 # Para /myalerts, o texto formatado pode conter caracteres (<, >) que causam erro HTML.
-                 # Enviamos como texto puro aqui.
-                 try:
-                     self.telegram_client.send_message(chat_id, response, parse_mode=None) # <-- ADICIONE parse_mode=None AQUI
-                     logger.debug(f"Route: myalerts -> Response sent successfully to chat {chat_id}.")
-                     return None # Retorna None porque a mensagem já foi enviada diretamente
-                 except Exception as e:
-                     logger.error(f"❌ Error sending /myalerts response to chat {chat_id}: {e}", exc_info=True)
-                     # Fallback para enviar uma mensagem de erro simples se a formatação falhou
-                     try:
-                          self.telegram_client.send_message(chat_id, "Desculpe, não consegui enviar a lista completa de alertas.", parse_mode=None)
-                     except Exception as e2:
-                          logger.error(f"❌ Failed to send fallback error message to chat {chat_id}: {e2}", exc_info=True)
-                     return None # Ainda retorna None pois a tentativa de resposta principal falhou
+            logger.info(f"Received command alias: /{command_alias} with args: '{command_args}' from user {user_id} in chat {chat_id}")
 
-            except Exception as e:
-                 logger.error(f"Error handling myalerts for user {user_telegram_id}: {e}", exc_info=True)
-                 # Se ocorrer um erro antes de tentar formatar/enviar (ex: erro no DBManager),
-                 # esta mensagem de erro genérica é retornada.
-                 return "❌ Ocorreu um erro ao buscar seus alertas."
-
-        elif internal_command == 'clearalerts':
-             logger.debug("Route: clearalerts")
-             try:
-                  success = self.db_manager.clear_user_crypto_preferences(user_telegram_id, clear_favorites=False, clear_alerts=True)
-                  if success:
-                       logger.debug("Route: clearalerts -> Alerts cleared.")
-                       return "✅ Todos os seus alertas de preço foram removidos."
-                  else:
-                       logger.debug("Route: clearalerts -> Failed to clear alerts (user not found?).")
-                       return "❌ Não foi possível remover seus alertas."
-             except Exception as e:
-                  logger.error(f"Error handling clearalerts for user {user_telegram_id}: {e}", exc_info=True)
-                  return "❌ Ocorreu um erro ao remover seus alertas."
-
-        elif internal_command == 'favorite':
-             logger.debug("Route: favorite")
-             symbol = args.strip().upper()
-             if not symbol:
-                  return "Por favor, especifique um símbolo de criptomoeda para marcar como favorito (ex: /favorite BTC)."
-
-             is_symbol_valid = True
-             if self.price_client is not None and hasattr(self.price_client, 'is_valid_symbol') and hasattr(self.price_client, 'is_ready') and self.price_client.is_ready():
-                  try:
-                       logger.debug(f"Checking symbol validity for '{symbol}' using price client.")
-                       is_symbol_valid = self.price_client.is_valid_symbol(symbol)
-                       if not is_symbol_valid:
-                            logger.warning(f"Symbol '{symbol}' deemed invalid by price client.")
-                  except Exception as e:
-                       logger.error(f"Error validating symbol {symbol} with price client: {e}", exc_info=True)
-                       is_symbol_valid = False
-                       logger.warning(f"Symbol validation for '{symbol}' failed due to an error, proceeding with DB save attempt.")
-             elif self.price_client is None or not hasattr(self.price_client, 'is_valid_symbol') or not hasattr(self.price_client, 'is_ready') or (hasattr(self.price_client, 'is_ready') and not self.price_client.is_ready()):
-                  logger.warning(f"Price client not available, not ready, or missing 'is_valid_symbol' method. Cannot validate symbol for favorite command for user {user_telegram_id}. Saving to DB without validation.")
-
-             try:
-                  updated_pref = self.db_manager.add_or_update_preference(user_telegram_id, symbol, is_favorite=True)
-                  if updated_pref:
-                       logger.debug(f"Route: favorite -> Marked {symbol} as favorite for user {user_telegram_id}.")
-                       return f"✅ '{symbol}' foi marcado como favorito." + (" Aviso: Símbolo pode ser inválido." if not is_symbol_valid else "")
-                  else:
-                       logger.error(f"Route: favorite -> Failed to add/update {symbol} as favorite for user {user_telegram_id}.")
-                       return f"❌ Não foi possível marcar '{symbol}' como favorito."
-             except Exception as e:
-                  logger.error(f"Error handling favorite command for user {user_telegram_id}, symbol {symbol}: {e}", exc_info=True)
-                  return f"❌ Ocorreu um erro ao marcar '{symbol}' como favorito."
-
-        elif internal_command == 'myfavorites':
-             logger.debug("Route: myfavorites")
-             try:
-                  user_preferences = self.db_manager.get_user_crypto_preferences(user_telegram_id, is_favorite=True)
-                  if not user_preferences:
-                       logger.debug("Route: myfavorites -> No favorites found.")
-                       return "Você não tem criptomoedas favoritas marcadas."
-
-                  response_lines = ["⭐️ Suas criptomoedas favoritas:"]
-                  for pref in user_preferences:
-                       response_lines.append(f"- {pref.symbol}")
-
-                  response = "\n".join(response_lines)
-                  logger.debug(f"Route: myfavorites -> Returning: {response[:100]}...")
-                  return response
-             except Exception as e:
-                  logger.error(f"Error handling myfavorites for user {user_telegram_id}: {e}", exc_info=True)
-                  return "❌ Ocorreu um erro ao buscar seus favoritos."
-
-        elif internal_command == 'clearnotifications':
-             logger.debug("Route: clearnotifications")
-             try:
-                  success = self.db_manager.clear_user_crypto_preferences(user_telegram_id, clear_favorites=True, clear_alerts=True)
-                  if success:
-                       logger.debug("Route: clearnotifications -> Alerts and favorites cleared.")
-                       return "✅ Todos os seus alertas e favoritos foram removidos."
-                  else:
-                       logger.debug("Route: clearnotifications -> Failed to clear alerts and favorites (user not found?).")
-                       return "❌ Não foi possível remover seus alertas e favoritos."
-             except Exception as e:
-                  logger.error(f"Error handling clearnotifications for user {user_telegram_id}: {e}", exc_info=True)
-                  return "❌ Ocorreu um erro ao remover seus alertas e favoritos."
-
-        elif internal_command == 'unknown':
-            # args não é usado aqui, então a correção do NameError já resolve
-            logger.warning(f"Unknown command alias received resolved to 'unknown'.")
-            return "Comando desconhecido. Use /help ou /ajuda para ver os comandos disponíveis."
+            # Roteia o comando para a função apropriada
+            # Passa update e context para os handlers na v20+
+            self.route_command(command_alias, command_args, user_id, chat_id, update, context) # Passa update e context
 
         else:
-            logger.warning(f"Internal command '{internal_command}' is not implemented.")
-            return "Desculpe, este comando ainda não foi completamente implementado."
+            # Mensagem não é um comando, pode ser tratada como texto livre (se necessário)
+            # Por enquanto, apenas ignora ou responde com mensagem padrão
+            logger.info(f"Received non-command message from user {user_id} in chat {chat_id}. Ignoring text: '{message_text}'")
+            # Não retorna resposta para texto livre por padrão
+            # self.telegram_client.send_message(chat_id, "Desculpe, eu só respondo a comandos que começam com '/'. Digite /ajuda para ver a lista de comandos.")
+            pass # Não envia resposta para texto livre
 
-    def _get_help_message(self) -> str:
-        help_message = (
-                "Comandos disponíveis:\n"
-                "/start ou /iniciar - Inicia a conversa\n"
-                "/help ou /ajuda - Mostra esta mensagem\n"
-                "/price <SIMBOLO> ou /preco <SIMBOLO> - Mostra o preço atual de uma criptomoeda (ex: /price BTC)\n"
-                "/alert <SIMBOLO> high/low/alta/baixa <PRECO> ou /alerta <SIMBOLO> high/low/alta/baixa <PRECO> - Define um alerta de preço (ex: /alert BTC alta 70000)\n"
-                "/myalerts ou /meusalertas - Mostra seus alertas configurados\n"
-                "/clearalerts ou /limparalertas - Remove todos os seus alertas\n"
-                "/favorite <SIMBOLO> ou /favorito <SIMBOLO> ou /favoritar <SIMBOLO> - Marca uma criptomoeda como favorita (ex: /favorite ADA)\n"
-                "/myfavorites ou /meusfavoritos - Mostra suas criptomoedas favoritas\n"
-                "/clearnotifications ou /limparnotificacoes ou /limpartudo - Remove todos os alertas e favoritos\n"
-            )
-        return help_message
+
+    def route_command(self, command_alias: str, command_args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None: # Assinatura do router na v20+
+        """
+        Roteia um alias de comando para a função de tratamento interna correspondente (v20+).
+        Handlers enviam respostas diretamente.
+        """
+        logger.debug(f"Normalized command alias '{command_alias}' to '{self._alias_to_command.get(command_alias, command_alias)}'.")
+        internal_command = self._alias_to_command.get(command_alias, command_alias) # Busca o comando interno pelo alias
+
+        handler_tuple = self.commands.get(internal_command)
+
+        logger.debug(f"Route: {internal_command}")
+
+        if handler_tuple:
+            handler_func, _ = handler_tuple
+            try:
+                # Executa a função de tratamento do comando
+                # Passa args, user_id, chat_id, update, context para os handlers na v20+
+                # CORRIGIDO: Passando update e context para os handlers
+                handler_func(command_args, user_id, chat_id, update, context)
+
+                logger.debug(f"Route: {internal_command} -> Handler executed successfully.")
+
+            except Exception as e:
+                logger.error(f"❌ Error processing command /{command_alias} with args '{command_args}' for user {user_id} in chat {chat_id}: {e}", exc_info=True)
+                # Em caso de erro no handler, envia uma mensagem de erro para o usuário
+                # Usa a instância do telegram_client para enviar a mensagem
+                self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro interno ao executar este comando.")
+
+        else:
+            # Comando não reconhecido
+            logger.warning(f"Unknown command alias received: /{command_alias} from user {user_id} in chat {chat_id}.")
+            # Usa a instância do telegram_client para enviar a mensagem
+            self.telegram_client.send_message(chat_id, f"Comando não reconhecido: /{command_alias}. Digite /ajuda para ver os comandos disponíveis.")
+
+    # --- Função auxiliar para escapar caracteres MarkdownV2 ---
+    def escape_markdownv2_response(self, text: Union[str, float, int]) -> str:
+        """Escapa caracteres especiais para MarkdownV2 em strings de resposta."""
+        text_str = str(text)
+        # Caracteres especiais em MarkdownV2 que precisam ser escapados na resposta
+        # Nota: A lista de caracteres pode variar ligeiramente dependendo de onde são usados.
+        # Para texto geral de resposta, focamos nos mais comuns que podem quebrar a formatação.
+        # Evitamos escapar * e _ se quisermos usá-los para negrito/itálico na resposta.
+        # Escapamos: [, ], (, ), ~, `, > , #, +, -, =, |, {, }, ., !
+        special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+        return re.sub(special_chars, r'\\\1', text_str)
+
+
+    # --- Handlers de Comandos (Assinatura atualizada para v20+) ---
+    # Todos os handlers agora recebem args: str, user_id: str, chat_id: str, update: Any, context: Any
+    # E não retornam string, enviam a resposta via self.telegram_client.send_message
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_start(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /start."""
+        welcome_message = "Olá! Eu sou o MarianaCryptoBot, seu assistente para acompanhar o mercado de criptomoedas.\n"
+        welcome_message += "Use os comandos para ver preços, definir alertas e mais.\n"
+        welcome_message += "Digite /ajuda para ver a lista de comandos."
+        self.telegram_client.send_message(chat_id, welcome_message)
+        # Handlers na v20+ não precisam retornar nada se enviam a resposta diretamente
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_help(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /help."""
+        help_message = "Comandos disponíveis:\n"
+        help_message += "/preço [símbolo] - Mostra o preço atual de uma criptomoeda (ex: /preço btc)\n"
+        help_message += "/alerta [símbolo] [alta/baixa] [preço] - Define um alerta de preço (ex: /alerta eth alta 2000)\n"
+        help_message += "/meusalertas - Lista seus alertas configurados\n"
+        help_message += "/limparalertas [símbolo] (opcional) - Limpa seus alertas (todos ou para um símbolo)\n"
+        help_message += "/favoritar [símbolo] - Marca uma moeda como favorita (ex: /favoritar xrp)\n" # Ajuda para novo comando
+        help_message += "/desfavoritar [símbolo] - Desmarca uma moeda como favorita (ex: /desfavoritar xrp)\n" # Ajuda para novo comando
+        help_message += "/meusfavoritos - Lista suas moedas favoritas\n" # Ajuda para novo comando
+        help_message += "/listar [moeda_base] [quantidade] - Lista as principais moedas por capitalização (ex: /listar usd 10)\n" # Ajuda para novo comando /listar
+        # --- Ajuda para o novo comando /broadcast ---
+        help_message += "/broadcast [mensagem] - Envia uma mensagem para todos os usuários (apenas para admin)\n"
+        # --- Fim Ajuda /broadcast ---
+        help_message += "/ajuda - Mostra esta mensagem"
+        self.telegram_client.send_message(chat_id, help_message)
+        # Este handler envia a resposta diretamente, então retorna None
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_price(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /price."""
+        symbols = [s.strip() for s in args.split(',') if s.strip()]
+        if not symbols:
+            self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda (ex: /preço btc) ou múltiplos símbolos separados por vírgula (ex: /preço btc,eth).")
+            return
+
+        if len(symbols) > 5:
+             self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos por vez.")
+             return
+
+
+        logger.debug(f"Fetching price for symbols: {symbols} for user {user_id}")
+        prices_data = self.price_client.get_multiple_prices(symbols, currency=['usd', 'brl'])
+
+        response_lines = ["📊 **Preços Atuais:**"]
+
+        found_price = False
+
+        # Escapa caracteres especiais para MarkdownV2 na resposta - Função local para este handler
+        def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
+            text_str = str(text)
+            special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+            return re.sub(special_chars, r'\\\1', text_str)
+
+
+        for symbol in symbols:
+            price_data = prices_data.get(symbol.upper())
+            if price_data:
+                found_price = True
+                price_usd = price_data.get('price_usd')
+                price_brl = price_data.get('price_brl')
+                change_usd = price_data.get('price_change_percent_usd')
+
+                symbol_escaped = escape_markdownv2_response_local(symbol.upper())
+                price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A")
+                price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A")
+
+                line = f"- **{symbol_escaped}**: \\${price_usd_escaped}"
+                if price_brl is not None:
+                    line += f" \(R\\${price_brl_escaped}\)"
+
+                if change_usd is not None:
+                    change_str = f"{change_usd:+.2f}%"
+                    if change_usd >= 0:
+                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\\)"
+                    else:
+                         line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\\)"
+                else:
+                    line += " \(24h: N/A\\)"
+
+                response_lines.append(line)
+
+        if not found_price:
+            response_lines.append("Nenhum preço encontrado para os símbolos especificados.")
+
+        response_text = "\n".join(response_lines)
+
+        self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_favorite(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /favoritar."""
+        symbols = [s.strip() for s in args.split(',') if s.strip()]
+        if not symbols:
+            self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda para favoritar (ex: /favoritar btc).")
+            return
+
+        if len(symbols) > 5:
+             self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos para favoritar por vez.")
+             return
+
+        results = []
+        for symbol in symbols:
+             if not self.price_client.is_valid_symbol(symbol):
+                  results.append(f"❌ Símbolo '{symbol.upper()}' não reconhecido.")
+                  continue
+
+             try:
+                  preference = self.db_manager.add_or_update_preference(str(user_id), symbol.upper(), is_favorite=True)
+                  if preference:
+                       results.append(f"⭐ '{symbol.upper()}' adicionado aos seus favoritos.")
+                  else:
+                       results.append(f"❌ Erro ao favoritar '{symbol.upper()}'.")
+             except Exception as e:
+                  logger.error(f"Error favoriting symbol {symbol.upper()} for user {user_id}: {e}", exc_info=True)
+                  results.append(f"❌ Erro interno ao favoritar '{symbol.upper()}'.")
+
+        self.telegram_client.send_message(chat_id, "\n".join(results))
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_unfavorite(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /desfavoritar."""
+        symbols = [s.strip() for s in args.split(',') if s.strip()]
+        if not symbols:
+            self.telegram_client.send_message(chat_id, "Por favor, especifique o símbolo da criptomoeda para desfavoritar (ex: /desfavoritar btc).")
+            return
+
+        if len(symbols) > 5:
+             self.telegram_client.send_message(chat_id, "Por favor, especifique no máximo 5 símbolos para desfavoritar por vez.")
+             return
+
+        results = []
+        for symbol in symbols:
+             try:
+                  cleared = self.db_manager.clear_user_crypto_preferences(str(user_id), symbol.upper(), clear_favorites=True, clear_alerts=False)
+                  if cleared:
+                       results.append(f"💔 '{symbol.upper()}' removido dos seus favoritos.")
+                  else:
+                       results.append(f"ℹ️ '{symbol.upper()}' não estava nos seus favoritos.")
+             except Exception as e:
+                  logger.error(f"Error unfavoriting symbol {symbol.upper()} for user {user_id}: {e}", exc_info=True)
+                  results.append(f"❌ Erro interno ao desfavoritar '{symbol.upper()}'.")
+
+        self.telegram_client.send_message(chat_id, "\n".join(results))
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_my_favorites(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /meusfavoritos."""
+        try:
+            favorite_preferences = self.db_manager.get_user_crypto_preferences(str(user_id), is_favorite=True)
+
+            if not favorite_preferences:
+                self.telegram_client.send_message(chat_id, "Você ainda não favoritou nenhuma moeda. Use /favoritar [símbolo] para adicionar.")
+                return
+
+            favorite_symbols = [pref.symbol for pref in favorite_preferences]
+
+            prices_data = self.price_client.get_multiple_prices(favorite_symbols, currency=['usd', 'brl'])
+
+            response_lines = ["⭐ **Suas moedas favoritas:**"]
+
+            # Escapa caracteres especiais para MarkdownV2 na resposta - Função local para este handler
+            def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
+                text_str = str(text)
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+                return re.sub(special_chars, r'\\\1', text_str)
+
+
+            for symbol in favorite_symbols:
+                 price_data = prices_data.get(symbol.upper())
+                 if price_data:
+                      price_usd = price_data.get('price_usd')
+                      price_brl = price_data.get('price_brl')
+                      change_usd = price_data.get('price_change_percent_usd')
+
+                      symbol_escaped = escape_markdownv2_response_local(symbol.upper())
+                      price_usd_escaped = escape_markdownv2_response_local(f"{price_usd:,.2f}" if price_usd is not None else "N/A")
+                      price_brl_escaped = escape_markdownv2_response_local(f"{price_brl:,.2f}" if price_brl is not None else "N/A")
+
+                      line = f"- **{symbol_escaped}**: \\${price_usd_escaped}"
+                      if price_brl is not None:
+                           line += f" \(R\\${price_brl_escaped}\)"
+
+                      if change_usd is not None:
+                           change_str = f"{change_usd:+.2f}%"
+                           if change_usd >= 0:
+                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🟢\\)"
+                           else:
+                                line += f" \(24h: {escape_markdownv2_response_local(change_str)} 🔴\\)"
+                      else:
+                           line += " \(24h: N/A\\)"
+
+                      response_lines.append(line)
+                 else:
+                      response_lines.append(f"- **{escape_markdownv2_response_local(symbol.upper())}**: Preço não disponível")
+
+
+            response_text = "\n".join(response_lines)
+            self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
+
+        except Exception as e:
+            logger.error(f"Error listing favorites for user {user_id}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro ao listar seus favoritos.")
+
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_alert(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /alerta."""
+        parts = args.split()
+        if len(parts) != 3:
+            self.telegram_client.send_message(chat_id, "Uso correto: /alerta [símbolo] [alta/baixa] [preço] (ex: /alerta eth alta 2000)")
+            return
+
+        symbol = parts[0].upper()
+        alert_type = parts[1].lower()
+        price_str = parts[2]
+
+        if alert_type not in ['alta', 'baixa']:
+            self.telegram_client.send_message(chat_id, "Tipo de alerta inválido. Use 'alta' ou 'baixa'.")
+            return
+
+        try:
+            price = float(price_str)
+            if price <= 0:
+                 self.telegram_client.send_message(chat_id, "O preço do alerta deve ser um número positivo.")
+                 return
+        except ValueError:
+            self.telegram_client.send_message(chat_id, "Preço inválido. Por favor, insira um número válido.")
+            return
+
+        if not self.price_client.is_valid_symbol(symbol):
+             self.telegram_client.send_message(chat_id, f"Símbolo '{symbol}' não reconhecido. Por favor, use um símbolo válido (ex: BTC, ETH).")
+             return
+
+
+        try:
+            high_alert = price if alert_type == 'alta' else None
+            low_alert = price if alert_type == 'baixa' else None
+
+            preference = self.db_manager.add_or_update_preference(str(user_id), symbol, high_alert=high_alert, low_alert=low_alert)
+
+            if preference:
+                alert_set_message = f"🔔 Alerta de {alert_type} para {symbol.upper()} definido em ${price:,.2f}."
+                self.telegram_client.send_message(chat_id, alert_set_message)
+            else:
+                self.telegram_client.send_message(chat_id, f"❌ Erro ao definir alerta para {symbol.upper()}.")
+
+        except Exception as e:
+            logger.error(f"Error setting alert for user {user_id}, symbol {symbol}, type {alert_type}, price {price}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro interno ao definir o alerta.")
+
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_my_alerts(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /meusalertas."""
+        try:
+            alert_preferences = self.db_manager.get_user_crypto_preferences(str(user_id), with_alerts=True)
+
+            if not alert_preferences:
+                self.telegram_client.send_message(chat_id, "Você ainda não configurou nenhum alerta de preço. Use /alerta [símbolo] [alta/baixa] [preço] para adicionar.")
+                return
+
+            response_lines = ["🔔 **Seus alertas de preço configurados:**"]
+
+            # Escapa caracteres especiais para MarkdownV2 na resposta - Função local para este handler
+            def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
+                text_str = str(text)
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+                return re.sub(special_chars, r'\\\1', text_str)
+
+
+            for pref in alert_preferences:
+                symbol_escaped = escape_markdownv2_response_local(pref.symbol)
+                line_parts = [f"- **{symbol_escaped}**"]
+
+                if pref.high_alert is not None:
+                     high_price_escaped = escape_markdownv2_response_local(f"{pref.high_alert:,.2f}")
+                     line_parts.append(f"Alta > \\${high_price_escaped}")
+
+                if pref.low_alert is not None:
+                     low_price_escaped = escape_markdownv2_response_local(f"{pref.low_alert:,.2f}")
+                     line_parts.append(f"Baixa < \\${low_price_escaped}")
+
+                response_lines.append(": ".join(line_parts))
+
+
+            response_text = "\n".join(response_lines)
+            self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
+
+        except Exception as e:
+            logger.error(f"Error listing alerts for user {user_id}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro ao listar seus alertas.")
+
+
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_clear_alerts(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """Trata o comando /limparalertas."""
+        symbol_to_clear = args.strip().upper() if args.strip() else None
+
+        if symbol_to_clear and not self.price_client.is_valid_symbol(symbol_to_clear):
+             self.telegram_client.send_message(chat_id, f"Símbolo '{symbol_to_clear}' não reconhecido. Por favor, use um símbolo válido ou nenhum para limpar todos os alertas.")
+             return
+
+
+        try:
+            cleared = self.db_manager.clear_user_crypto_preferences(str(user_id), symbol_to_clear, clear_favorites=False, clear_alerts=True)
+
+            if cleared:
+                if symbol_to_clear:
+                    self.telegram_client.send_message(chat_id, f"🔔 Alertas para {symbol_to_clear} foram removidos.")
+                else:
+                    self.telegram_client.send_message(chat_id, "🔔 Todos os seus alertas de preço foram removidos.")
+            else:
+                if symbol_to_clear:
+                     self.telegram_client.send_message(chat_id, f"Nenhum alerta encontrado para {symbol_to_clear}.")
+                else:
+                     self.telegram_client.send_message(chat_id, "Você não tem alertas de preço configurados.")
+
+        except Exception as e:
+            logger.error(f"Error clearing alerts for user {user_id}, symbol {symbol_to_clear}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro interno ao limpar os alertas.")
+
+    # --- NOVO HANDLER DE COMANDO: Listar Moedas ---
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_list_coins(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """
+        Trata o comando /listar.
+        Espera argumentos opcionais: [moeda_base] [quantidade]
+        Ex: /listar usd 10, /listar brl 20, /listar 50 (usa usd padrão)
+        """
+        parts = args.split()
+        vs_currency = 'usd' # Moeda base padrão
+        per_page = 10 # Quantidade padrão
+
+        if len(parts) == 1:
+             try:
+                  per_page = int(parts[0])
+                  if per_page <= 0 or per_page > 250: # Limite da API
+                       self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, especifique um número entre 1 e 250.")
+                       return
+             except ValueError:
+                  vs_currency = parts[0].lower()
+
+        elif len(parts) == 2:
+             vs_currency = parts[0].lower()
+             try:
+                  per_page = int(parts[1])
+                  if per_page <= 0 or per_page > 250: # Limite da API
+                       self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, especifique um número entre 1 e 250.")
+                       return
+             except ValueError:
+                  self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, insira um número válido.")
+                  return
+
+        elif len(parts) > 2:
+             self.telegram_client.send_message(chat_id, "Uso correto: /listar [moeda_base] [quantidade] (ex: /listar usd 10 ou /listar 20)")
+             return
+
+        logger.debug(f"Fetching list of coins for user {user_id} in {vs_currency}, {per_page} per page.")
+
+        try:
+            # Chama o novo método do price_client
+            coins_list = self.price_client.get_coins_list_with_price(vs_currency=vs_currency, per_page=per_page)
+
+            if not coins_list:
+                self.telegram_client.send_message(chat_id, f"❌ Não foi possível obter a lista de moedas em {vs_currency.upper()}. Por favor, tente novamente mais tarde.")
+                return
+
+            response_lines = [f"🏆 **Top {len(coins_list)} moedas por Capitalização de Mercado em {vs_currency.upper()}:**"] # Título MarkdownV2
+
+            # Escapa caracteres especiais para MarkdownV2 na resposta - Função local para este handler
+            def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
+                text_str = str(text)
+                special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+                return re.sub(special_chars, r'\\\1', text_str)
+
+
+            for coin in coins_list:
+                # Acessa os dados da moeda. Alguns campos podem ser None.
+                rank = coin.get('market_cap_rank', 'N/A')
+                symbol = coin.get('symbol', 'N/A').upper()
+                name = coin.get('name', 'N/A')
+                price = coin.get('current_price') # Pode ser None
+                change_24h = coin.get('price_change_percentage_24h') # Pode ser None
+
+                # Formata o preço e a variação
+                price_formatted = f"{price:,.2f}" if price is not None else "N/A"
+                change_formatted = f"{change_24h:+.2f}%" if change_24h is not None else "N/A"
+
+                # Adiciona emoji para variação
+                if change_24h is not None:
+                     if change_24h >= 0:
+                          change_formatted += " 🟢"
+                     else:
+                          change_formatted += " 🔴"
+
+                # Escapa os valores para MarkdownV2
+                rank_escaped = escape_markdownv2_response_local(rank)
+                symbol_escaped = escape_markdownv2_response_local(symbol)
+                name_escaped = escape_markdownv2_response_local(name)
+                price_escaped = escape_markdownv2_response_local(price_formatted)
+                change_escaped = escape_markdownv2_response_local(change_formatted)
+
+
+                # Monta a linha da lista
+                # Ex: 1\. **BTC** \(Bitcoin\): \$96,000\.00 \(24h: \+2\.50\% 🟢\)
+                line = f"{rank_escaped}\\. **{symbol_escaped}** \({name_escaped}\): \\${price_escaped} \(24h: {change_escaped}\)" # Escapa . ( ) $
+
+                response_lines.append(line)
+
+            response_text = "\n".join(response_lines)
+
+            # Envia a mensagem com MarkdownV2
+            self.telegram_client.send_message(chat_id, response_text, parse_mode='MarkdownV2')
+
+        except Exception as e:
+            logger.error(f"Error handling /listcoins for user {user_id}: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro ao listar as moedas.")
+
+    # --- NOVO HANDLER DE COMANDO: Broadcast ---
+    # CORRIGIDO: Assinatura do handler atualizada
+    def handle_broadcast(self, args: str, user_id: str, chat_id: str, update: Any, context: Any) -> None:
+        """
+        Trata o comando /broadcast.
+        Envia a mensagem fornecida nos argumentos para todos os usuários registrados.
+        Apenas o usuário com o ID definido em TELEGRAM_ADMIN_ID pode usar este comando.
+        """
+        # 1. Verificar se o remetente é o administrador
+        if self.admin_telegram_id is None or str(user_id) != str(self.admin_telegram_id):
+            logger.warning(f"Unauthorized attempt to use broadcast command by user {user_id} in chat {chat_id}.")
+            self.telegram_client.send_message(chat_id, "❌ Comando de broadcast restrito ao administrador.")
+            return # Sai da função se não for admin
+
+        # 2. Obter a mensagem a ser transmitida dos argumentos
+        broadcast_message = args.strip()
+        if not broadcast_message:
+            self.telegram_client.send_message(chat_id, "Por favor, forneça a mensagem a ser transmitida (ex: /broadcast Olá a todos!).")
+            return # Sai se não houver mensagem
+
+        logger.info(f"Admin user {user_id} is initiating broadcast message: '{broadcast_message[:100]}...'")
+
+        # 3. Obter a lista de todos os IDs de usuário do banco de dados
+        try:
+            # Usa o novo método do DatabaseManager
+            all_user_ids = self.db_manager.get_all_user_telegram_ids()
+            logger.debug(f"Attempting to broadcast to {len(all_user_ids)} users.")
+        except Exception as e:
+            logger.error(f"Error getting all user IDs for broadcast: {e}", exc_info=True)
+            self.telegram_client.send_message(chat_id, "❌ Erro ao obter a lista de usuários para broadcast.")
+            return # Sai se falhar ao obter usuários
+
+        if not all_user_ids:
+            self.telegram_client.send_message(chat_id, "ℹ️ Não há usuários registrados no banco de dados para enviar o broadcast.")
+            return # Sai se não houver usuários
+
+        # 4. Enviar a mensagem para cada usuário
+        sent_count = 0
+        failed_count = 0
+        failed_users = []
+
+        # Usando MarkdownV2 para a mensagem de broadcast
+        # Escapa a mensagem de broadcast para MarkdownV2
+        # Função local para este handler
+        def escape_markdownv2_response_local(text: Union[str, float, int]) -> str:
+            text_str = str(text)
+            special_chars = r'([\[\]\(\)~`>#\+\-=\|\{\}\.!])' # Removido * e _
+            return re.sub(special_chars, r'\\\1', text_str)
+
+        broadcast_message_escaped = escape_markdownv2_response_local(broadcast_message)
+
+
+        for target_user_id in all_user_ids:
+            # Não envia a mensagem de broadcast de volta para o próprio admin no chat de comando
+            # (A menos que o admin seja o único usuário, o que é improvável em produção)
+            # Mas é mais seguro enviar para todos, incluindo o admin, para confirmar o envio.
+            # Se o admin usar o comando em um chat privado, ele receberá a mensagem de broadcast.
+            # Se usar em um grupo, todos no grupo (incluindo ele) receberão a mensagem de broadcast.
+            # A API do Telegram lida com envios para o mesmo chat_id.
+
+            try:
+                # Usa o telegram_client para enviar a mensagem
+                # Envia a mensagem de broadcast escapada com MarkdownV2
+                self.telegram_client.send_message(chat_id=str(target_user_id), text=broadcast_message_escaped, parse_mode='MarkdownV2')
+                sent_count += 1
+                logger.debug(f"Broadcast message sent to user ID: {target_user_id}")
+                # Pequena pausa para não sobrecarregar a API, especialmente com muitos usuários
+                time.sleep(0.1) # Pausa de 100ms
+            except Exception as e:
+                failed_count += 1
+                failed_users.append(target_user_id)
+                logger.error(f"❌ Failed to send broadcast message to user ID {target_user_id}: {e}", exc_info=True)
+                # Continua para o próximo usuário mesmo que um falhe
+
+
+        # 5. Informar o administrador sobre o resultado do broadcast
+        result_message = f"✅ Broadcast concluído.\n"
+        result_message += f"Enviado com sucesso para {sent_count} usuários.\n"
+        if failed_count > 0:
+            result_message += f"❌ Falha ao enviar para {failed_count} usuários (IDs: {', '.join(failed_users[:10])}{'...' if len(failed_users) > 10 else ''})."
+
+        # Envia a mensagem de resultado de volta para o chat onde o comando foi emitido
+        self.telegram_client.send_message(chat_id, result_message)
+        logger.info(f"Broadcast result reported to admin in chat {chat_id}.")
+
+    # --- Fim NOVO HANDLER DE COMANDO: Broadcast ---
+
