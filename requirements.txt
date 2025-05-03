@@ -4,16 +4,22 @@ python-dotenv       # Para carregar variáveis de ambiente de um arquivo .env (u
 sqlalchemy          # ORM para interação com o banco de dados SQLite
 pydantic>=2.0       # Validação de dados (usado por algumas bibliotecas, como OpenAI)
 openai              # Cliente para a API da OpenAI (se estiver usando)
-python-telegram-bot==13.15 # <-- Força esta versão específica da biblioteca do Telegram
-telegram            # Dependência de python-telegram-bot (geralmente instalada automaticamente)
+
+# Removendo a versão fixa para permitir a instalação de uma versão mais recente
+# que seja compatível com um APScheduler mais novo (necessário para Python 3.11)
+python-telegram-bot # Permitir a instalação da versão mais recente (20.x ou superior)
+
+# A dependência 'telegram' geralmente é instalada automaticamente por python-telegram-bot
+# Mas pode ser mantida se houver alguma dependência direta no seu código.
+# telegram
+
 pycoingecko         # Cliente para a API da CoinGecko
 
-# Fixando versões de APScheduler e pytz para tentar resolver o erro 'normalize'
-# CORRIGIDO: Ajustando a versão do APScheduler para corresponder à exigência de python-telegram-bot==13.15
-apscheduler==3.6.3
-# Fixando para uma versão de pytz que está na lista de disponíveis e compatível com APScheduler 3.6.3
-# A versão 2023.3 deve funcionar com APScheduler 3.6.3
-pytz==2023.3
+# Removendo a versão fixa de APScheduler e pytz.
+# pip agora resolverá as dependências com base na versão de python-telegram-bot instalada.
+# A versão mais recente de python-telegram-bot (20.x) dependerá de um APScheduler compatível com Python 3.11.
+apscheduler
+pytz
 
 # Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
 pip
