@@ -3,7 +3,7 @@ import os
 import telegram
 # Importar as classes do telegram.ext
 # CORRIGIDO: Filters agora é importado diretamente de telegram.ext
-from telegram.ext import Application, MessageHandler, CommandHandler, filters # Use 'filters' em minúsculo para a nova API
+from telegram.ext import Application, MessageHandler, CommandHandler, filters # Use 'filters' em minúsculas para a nova API
 
 from typing import Dict, Any, Callable, Optional, List, Union
 
@@ -30,8 +30,9 @@ class TelegramClient:
                                          Pode ser None inicialmente.
         """
         if not bot_token:
-            logger.critical("❌ TELEGRAM_BOT_TOKEN is not set. Cannot initialize TelegramClient.")
-            raise ValueError("TELEGRAM_BOT_TOKEN is required.")
+            # CORRIGIDO: Atualiza a mensagem de log para refletir a variável de ambiente correta
+            logger.critical("❌ TELEGRAM_TOKEN is not set. Cannot initialize TelegramClient.")
+            raise ValueError("TELEGRAM_TOKEN is required.") # Mantém a mensagem de erro consistente
 
         # CORRIGIDO: Use Application.builder() para inicializar o bot na v20+
         self.application = Application.builder().token(bot_token).build()
@@ -67,23 +68,17 @@ class TelegramClient:
         # Use CommandHandler para comandos e MessageHandler para texto não comando
         # O callback agora é o método handle_message da instância message_handler_instance
 
-        # Handler para comandos (mensagens que começam com /)
-        # Registra handlers para comandos específicos OU um handler genérico para todos os comandos
-        # Se handle_message lida com todos os comandos, o handler genérico abaixo é suficiente.
-        # Se precisar de lógica específica ANTES ou DEPOIS de handle_message para comandos específicos,
-        # adicione CommandHandlers individuais aqui.
-        # Exemplo: self.application.add_handler(CommandHandler("start", self.message_handler_instance.handle_start)) # Se handle_start existir e tiver a assinatura correta
-
-        # Handler genérico para TODOS os comandos
-        # Na v20+, o callback de CommandHandler recebe (update, context)
-        self.application.add_handler(CommandHandler(None, self.message_handler_instance.handle_message)) # None para todos os comandos
-        logger.debug("✅ Command handler registered.")
+        # CORRIGIDO: Substituído CommandHandler(None, ...) por MessageHandler(filters.COMMAND, ...)
+        # Isso registra o handle_message para TODAS as mensagens que são comandos (começam com /)
+        # O handle_message no MessageHandler é responsável por analisar qual comando específico foi e rotear internamente.
+        self.application.add_handler(MessageHandler(filters.COMMAND, self.message_handler_instance.handle_message))
+        logger.debug("✅ Command message handler registered with filter filters.COMMAND")
 
 
         # Handler para mensagens de texto que NÃO são comandos
         # Na v20+, o callback de MessageHandler recebe (update, context)
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler_instance.handle_message))
-        logger.debug("✅ Text message handler registered.")
+        logger.debug("✅ Text message handler registered with filter filters.TEXT & ~filters.COMMAND")
 
         # TODO: Adicionar outros handlers (ex: para fotos, documentos, etc.) se necessário
 
