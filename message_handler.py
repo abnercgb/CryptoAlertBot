@@ -3,6 +3,9 @@ from typing import Dict, Any, Optional, List, Callable, Tuple, Union # Importa U
 import re # Importa o módulo re para usar expressões regulares
 import os # Importa o módulo os para acessar variáveis de ambiente
 import time # Importa time para usar sleep
+# CORRIGIDO: Importa datetime para usar na anotação de tipo
+from datetime import datetime
+
 
 # Importar as classes dependentes para type hinting
 # from database_manager import DatabaseManager # Não precisamos importar a classe real aqui para type hinting
@@ -17,6 +20,7 @@ class DatabaseManager:
     def get_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, is_favorite: Optional[bool] = None, with_alerts: bool = False) -> List[Any]: pass
     def clear_user_crypto_preferences(self, telegram_id: str, symbol: Optional[str] = None, clear_favorites: bool = True, clear_alerts: bool = True) -> bool: pass
     def get_all_user_preferences_for_monitoring(self) -> List[Any]: pass # Método usado pelo PriceMonitor
+    # CORRIGIDO: datetime agora está importado, então a anotação de tipo funciona
     def update_alert_triggered_at(self, preference_id: int, timestamp: datetime, triggered_price: float) -> bool: pass
     # Adiciona type hint para o novo método
     def get_all_user_telegram_ids(self) -> List[str]: pass
@@ -551,15 +555,19 @@ class MessageHandler:
         per_page = 10 # Quantidade padrão
 
         if len(parts) == 1:
+             # Se um argumento foi fornecido, pode ser a quantidade ou a moeda
              try:
                   per_page = int(parts[0])
                   if per_page <= 0 or per_page > 250: # Limite da API
                        self.telegram_client.send_message(chat_id, "Quantidade inválida. Por favor, especifique um número entre 1 e 250.")
                        return
              except ValueError:
+                  # Se não é um número, assume que é a moeda
                   vs_currency = parts[0].lower()
+                  # Poderíamos adicionar uma verificação de moeda válida aqui se tivéssemos uma lista
 
         elif len(parts) == 2:
+             # Se dois argumentos foram fornecidos, o primeiro é a moeda e o segundo é a quantidade
              vs_currency = parts[0].lower()
              try:
                   per_page = int(parts[1])
@@ -634,6 +642,8 @@ class MessageHandler:
         except Exception as e:
             logger.error(f"Error handling /listcoins for user {user_id}: {e}", exc_info=True)
             self.telegram_client.send_message(chat_id, "Desculpe, ocorreu um erro ao listar as moedas.")
+
+        return
 
     # --- NOVO HANDLER DE COMANDO: Broadcast ---
     # CORRIGIDO: Assinatura do handler atualizada
