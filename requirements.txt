@@ -9,10 +9,10 @@ telegram            # Dependência de python-telegram-bot (geralmente instalada 
 pycoingecko         # Cliente para a API da CoinGecko
 
 # Fixando versões de APScheduler e pytz para tentar resolver o erro 'normalize'
-# A versão 3.9.1 de APScheduler é uma versão estável anterior a algumas mudanças significativas.
-# pytz é necessário para fusos horários.
-apscheduler==3.9.1
-# CORRIGIDO: Fixando para uma versão de pytz que está na lista de disponíveis
+# CORRIGIDO: Ajustando a versão do APScheduler para corresponder à exigência de python-telegram-bot==13.15
+apscheduler==3.6.3
+# Fixando para uma versão de pytz que está na lista de disponíveis e compatível com APScheduler 3.6.3
+# A versão 2023.3 deve funcionar com APScheduler 3.6.3
 pytz==2023.3
 
 # Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
