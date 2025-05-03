@@ -2,12 +2,11 @@ import logging
 import os
 import telegram
 # Importar as classes do telegram.ext
-# CORRIGIDO: Filters agora é importado diretamente de telegram.ext
 from telegram.ext import Application, MessageHandler, CommandHandler, filters # Use 'filters' em minúsculas para a nova API
 
 from typing import Dict, Any, Callable, Optional, List, Union
 
-# Importar a exceção específica do Telegram (se ainda precisar para tratamento de Conflict)
+# Importar a exceção específica do Telegram
 from telegram.error import Conflict # Importa a exceção Conflict
 
 logger = logging.getLogger(__name__)
@@ -19,38 +18,30 @@ if not logger.handlers:
 
 
 class TelegramClient:
-    # CORRIGIDO: A inicialização na v20+ usa Application em vez de Updater
+    # A inicialização na v20+ usa Application em vez de Updater
     # message_handler_instance será definido APÓS a inicialização desta classe em main.py
     def __init__(self, bot_token: str, message_handler_instance: Any = None): # Adiciona None como padrão
         """
         Inicializa o TelegramClient e conecta ao Telegram usando a API v20+.
         :param bot_token: O token do seu bot do Telegram.
-        # message_handler_instance será definido APÓS a inicialização desta classe em main.py
         :param message_handler_instance: A instância do MessageHandler com os métodos de tratamento.
                                          Pode ser None inicialmente.
         """
         if not bot_token:
-            # CORRIGIDO: Atualiza a mensagem de log para refletir a variável de ambiente correta
+            # Mensagem de log atualizada para TELEGRAM_TOKEN
             logger.critical("❌ TELEGRAM_TOKEN is not set. Cannot initialize TelegramClient.")
             raise ValueError("TELEGRAM_TOKEN is required.") # Mantém a mensagem de erro consistente
 
-        # CORRIGIDO: Use Application.builder() para inicializar o bot na v20+
+        # Use Application.builder() para inicializar o bot na v20+
         self.application = Application.builder().token(bot_token).build()
         self.bot = self.application.bot # O objeto bot está acessível via application
         self.message_handler_instance = message_handler_instance # Guarda a referência da instância do MessageHandler (pode ser None)
 
-        # CORRIGIDO: REMOVIDA A CHAMADA PARA self._register_handlers() daqui
+        # REMOVIDA A CHAMADA PARA self._register_handlers() daqui
         # Ela será chamada em main.py DEPOIS que message_handler_instance for definido.
-        # self._register_handlers() # <-- REMOVIDO!
 
-        # CORRIGIDO: REMOVIDA A CHAMADA PARA self.bot.get_me() E O LOG ASSOCIADO
+        # REMOVIDA A CHAMADA PARA self.bot.get_me() E O LOG ASSOCIADO do __init__
         # Esta chamada é assíncrona e não pode ser feita diretamente no __init__
-        # try:
-        #     bot_info = self.bot.get_me() # <-- REMOVIDO!
-        #     logger.info(f"Connected to Telegram bot: @{bot_info.username}") # <-- REMOVIDO!
-        # except telegram.error.TelegramError as e: # <-- REMOVIDO!
-        #     logger.critical(f"❌ Failed to connect to Telegram API: {e}", exc_info=True) # <-- REMOVIDO!
-        #     raise # Re-lança a exceção, pois a conexão é crítica # <-- REMOVIDO!
 
         logger.info("TelegramClient instance initialized. Connection status will be confirmed during polling start.")
 
@@ -64,16 +55,14 @@ class TelegramClient:
             logger.critical("❌ MessageHandler instance is not set. Cannot register Telegram handlers.")
             raise ValueError("MessageHandler instance is required to register handlers.")
 
-        # CORRIGIDO: Use filters.TEXT e filters.COMMAND da nova API
-        # Use CommandHandler para comandos e MessageHandler para texto não comando
+        # Use filters.TEXT e filters.COMMAND da nova API
+        # Use MessageHandler para comandos (com filtro filters.COMMAND) e para texto não comando
         # O callback agora é o método handle_message da instância message_handler_instance
 
-        # CORRIGIDO: Substituído CommandHandler(None, ...) por MessageHandler(filters.COMMAND, ...)
-        # Isso registra o handle_message para TODAS as mensagens que são comandos (começam com /)
-        # O handle_message no MessageHandler é responsável por analisar qual comando específico foi e rotear internamente.
+        # Handler genérico para TODOS os comandos (mensagens que começam com /)
+        # Na v20+, o callback de MessageHandler recebe (update, context)
         self.application.add_handler(MessageHandler(filters.COMMAND, self.message_handler_instance.handle_message))
         logger.debug("✅ Command message handler registered with filter filters.COMMAND")
-
 
         # Handler para mensagens de texto que NÃO são comandos
         # Na v20+, o callback de MessageHandler recebe (update, context)
@@ -83,12 +72,7 @@ class TelegramClient:
         # TODO: Adicionar outros handlers (ex: para fotos, documentos, etc.) se necessário
 
 
-    # CORRIGIDO: Não precisamos mais do método _wrapper_message_handler
-    # O handle_message no MessageHandler agora recebe update e context diretamente
-
-
-    # CORRIGIDO: O método send_message agora usa self.bot.send_message diretamente
-    # O parse_mode padrão foi movido para a chamada real
+    # O método send_message agora usa self.bot.send_message diretamente
     def send_message(self, chat_id: Union[int, str], text: str, parse_mode: Optional[str] = None) -> None:
         """
         Envia uma mensagem para um chat específico usando a API v20+.
@@ -100,7 +84,7 @@ class TelegramClient:
         """
         try:
             logger.debug(f"Attempting to send message to chat {chat_id}: {text[:50]}...") # Loga o início da mensagem
-            # CORRIGIDO: Use self.bot.send_message diretamente.
+            # Use self.bot.send_message diretamente.
             # Note que send_message na v20+ é uma corrotina, mas como este método
             # é chamado de dentro de handlers (que são executados assincronamente
             # pela biblioteca), a biblioteca lida com o 'await' para nós.
@@ -113,13 +97,13 @@ class TelegramClient:
             logger.error(f"❌ An unexpected error occurred while sending message to chat {chat_id}: {e}", exc_info=True)
 
 
-    # CORRIGIDO: O método start_listening agora usa self.application.run_polling()
+    # O método start_listening agora usa self.application.run_polling()
     def start_listening(self):
         """Inicia o polling para receber mensagens (v20+)."""
         logger.info("Starting Telegram listener (polling).")
         # --- Adiciona tratamento de erro para Conflict ---
         try:
-            # CORRIGIDO: Use run_polling() na v20+
+            # Use run_polling() na v20+
             # run_polling é bloqueante e mantém o bot rodando
             # Ele lida internamente com o loop de eventos assíncrono
             self.application.run_polling()
@@ -127,15 +111,16 @@ class TelegramClient:
             # Não precisamos de updater.idle() ou application.idle() explicitamente
             # se run_polling() for a última coisa no thread principal.
         except Conflict as e:
+             # ESTE BLOCO DEVE CAPTURAR O ERRO QUE VOCÊ ESTÁ VENDO
              logger.critical(f"❌ Conflict error during polling: {e}. Ensure only one bot instance is running with this token.", exc_info=True)
-             # Aqui você pode adicionar lógica para tentar reiniciar após um tempo,
-             # mas a causa raiz (multiplas instâncias) precisa ser resolvida manualmente.
-             # Por enquanto, apenas logamos o erro crítico.
+             # Re-lança a exceção para que o processo principal (main.py) saiba que houve uma falha crítica
+             raise
         except Exception as e:
              logger.critical(f"❌ An unexpected error occurred while starting Telegram listener: {e}", exc_info=True)
              raise # Re-lança para que o processo principal saiba que houve uma falha crítica
 
-    # CORRIGIDO: Adicionar um método stop_listening se precisar parar o bot
+
+    # Adicionar um método stop_listening se precisar parar o bot
     def stop_listening(self):
         """Para o polling (v20+)."""
         logger.info("Stopping Telegram listener.")
