@@ -20,12 +20,14 @@ if not logger.handlers:
 
 class TelegramClient:
     # CORRIGIDO: A inicialização na v20+ usa Application em vez de Updater
-    def __init__(self, bot_token: str, message_handler_instance: Any): # message_handler_instance será a instância do seu MessageHandler
+    # message_handler_instance será definido APÓS a inicialização desta classe em main.py
+    def __init__(self, bot_token: str, message_handler_instance: Any = None): # Adiciona None como padrão
         """
         Inicializa o TelegramClient e conecta ao Telegram usando a API v20+.
         :param bot_token: O token do seu bot do Telegram.
-        # CORRIGIDO: Agora passamos a instância completa do MessageHandler
+        # message_handler_instance será definido APÓS a inicialização desta classe em main.py
         :param message_handler_instance: A instância do MessageHandler com os métodos de tratamento.
+                                         Pode ser None inicialmente.
         """
         if not bot_token:
             logger.critical("❌ TELEGRAM_BOT_TOKEN is not set. Cannot initialize TelegramClient.")
@@ -34,10 +36,12 @@ class TelegramClient:
         # CORRIGIDO: Use Application.builder() para inicializar o bot na v20+
         self.application = Application.builder().token(bot_token).build()
         self.bot = self.application.bot # O objeto bot está acessível via application
-        self.message_handler_instance = message_handler_instance # Guarda a referência da instância do MessageHandler
+        self.message_handler_instance = message_handler_instance # Guarda a referência da instância do MessageHandler (pode ser None)
 
-        # Registrar os handlers
-        self._register_handlers()
+        # CORRIGIDO: REMOVIDA A CHAMADA PARA self._register_handlers() daqui
+        # Ela será chamada em main.py DEPOIS que message_handler_instance for definido.
+        # self._register_handlers() # <-- REMOVIDO!
+
 
         try:
             bot_info = self.bot.get_me()
@@ -48,19 +52,27 @@ class TelegramClient:
 
 
     def _register_handlers(self):
-        """Registra os handlers no application do Telegram (v20+)."""
+        """
+        Registra os handlers no application do Telegram (v20+).
+        Este método deve ser chamado APÓS a instância do MessageHandler ser definida.
+        """
+        if self.message_handler_instance is None:
+            logger.critical("❌ MessageHandler instance is not set. Cannot register Telegram handlers.")
+            raise ValueError("MessageHandler instance is required to register handlers.")
+
         # CORRIGIDO: Use filters.TEXT e filters.COMMAND da nova API
         # Use CommandHandler para comandos e MessageHandler para texto não comando
         # O callback agora é o método handle_message da instância message_handler_instance
 
         # Handler para comandos (mensagens que começam com /)
-        self.application.add_handler(CommandHandler("start", self.message_handler_instance.handle_message)) # Exemplo para /start
-        # Adicione outros CommandHandlers aqui para comandos específicos,
-        # ou use um MessageHandler com filters.COMMAND se seu handle_message
-        # lida com todos os comandos genericamente.
+        # Registra handlers para comandos específicos OU um handler genérico para todos os comandos
+        # Se handle_message lida com todos os comandos, o handler genérico abaixo é suficiente.
+        # Se precisar de lógica específica ANTES ou DEPOIS de handle_message para comandos específicos,
+        # adicione CommandHandlers individuais aqui.
+        # Exemplo: self.application.add_handler(CommandHandler("start", self.message_handler_instance.handle_start)) # Se handle_start existir e tiver a assinatura correta
 
-        # Se seu handle_message lida com TODOS os comandos, você pode usar:
-        self.application.add_handler(MessageHandler(filters.COMMAND, self.message_handler_instance.handle_message))
+        # Handler genérico para TODOS os comandos
+        self.application.add_handler(CommandHandler(None, self.message_handler_instance.handle_message)) # None para todos os comandos
         logger.debug("✅ Command handler registered with filter filters.COMMAND")
 
 
@@ -124,4 +136,3 @@ class TelegramClient:
         logger.info("Stopping Telegram listener.")
         self.application.stop_running()
         logger.info("Telegram listener stopped.")
-
