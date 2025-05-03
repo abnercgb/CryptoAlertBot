@@ -1,4 +1,6 @@
 # Bibliotecas necessárias para o bot
+# Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
+pip
 flask               # Framework web para o servidor Flask (se estiver usando)
 python-dotenv       # Para carregar variáveis de ambiente de um arquivo .env (uso local)
 sqlalchemy          # ORM para interação com o banco de dados SQLite
@@ -20,6 +22,3 @@ pycoingecko         # Cliente para a API da CoinGecko
 # A versão mais recente de python-telegram-bot (20.x) dependerá de um APScheduler compatível com Python 3.11.
 apscheduler
 pytz
-
-# Adicionado pip explicitamente para garantir que a última versão seja usada para instalar as dependências
-pip
