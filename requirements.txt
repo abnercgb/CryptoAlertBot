@@ -9,4 +9,4 @@ telegram
 pycoingecko
 apscheduler
 pytz
-pip install --upgrade pip
+pip
