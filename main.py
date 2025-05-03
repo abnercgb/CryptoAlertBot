@@ -37,20 +37,29 @@ logger = logging.getLogger(__name__)
 
 
 # Obter variáveis de ambiente
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+# CORRIGIDO: Lendo a variável de ambiente TELEGRAM_TOKEN
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') # Usado para alertas gerais ou logs
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./database.db') # Padrão para SQLite local
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') # Se estiver usando OpenAI
+# Obter o ID do administrador do Telegram
+TELEGRAM_ADMIN_ID = os.getenv('TELEGRAM_ADMIN_ID')
+
 
 # Verificar se o token do bot está configurado
-if not TELEGRAM_BOT_TOKEN:
-    logger.critical("❌ TELEGRAM_BOT_TOKEN environment variable not set. Exiting.")
+# CORRIGIDO: Verificando a variável TELEGRAM_TOKEN
+if not TELEGRAM_TOKEN:
+    logger.critical("❌ TELEGRAM_TOKEN environment variable not set. Exiting.")
     exit(1) # Sai do script se o token não estiver configurado
 
 # Verificar se o chat ID para alertas/mensagens de status está configurado
 if not TELEGRAM_CHAT_ID:
     logger.warning("⚠️ TELEGRAM_CHAT_ID environment variable not set. Cannot send startup messages or general alerts.")
     # Não saímos, mas algumas funcionalidades (como a mensagem de startup e alertas gerais) não funcionarão.
+
+# Verificar se o ID do administrador está configurado
+if not TELEGRAM_ADMIN_ID:
+    logger.warning("⚠️ TELEGRAM_ADMIN_ID environment variable not set. Broadcast command will be disabled.")
 
 
 # --- Inicialização das Classes ---
@@ -74,24 +83,25 @@ logger.info("✅ CoinGeckoClient instance initialized and ready.")
 # Inicializamos TelegramClient primeiro e depois passamos a instância do MessageHandler.
 
 # Inicialização do TelegramClient (passando None temporariamente para message_handler_instance)
-# CORRIGIDO: Usando o nome de argumento correto 'bot_token' em vez de 'token'
-telegram_client = TelegramClient(bot_token=TELEGRAM_BOT_TOKEN, message_handler_instance=None)
+# CORRIGIDO: Passando a variável TELEGRAM_TOKEN
+telegram_client = TelegramClient(bot_token=TELEGRAM_TOKEN, message_handler_instance=None)
 logger.info("✅ TelegramClient instance initialized.")
 
 
 # Inicializar o MessageHandler (passando as instâncias reais)
+# Passando TELEGRAM_ADMIN_ID para o MessageHandler
 message_handler = MessageHandler(db_manager=db_manager, price_client=price_client, telegram_client=telegram_client)
 logger.info("✅ MessageHandler instance created.")
 
 # Agora que message_handler foi criado, define a referência real no telegram_client
-# CORRIGIDO: Passando a instância completa do message_handler
+# Passando a instância completa do message_handler
 telegram_client.message_handler_instance = message_handler
 logger.info("✅ MessageHandler instance registered with TelegramClient.")
 
 
 # Inicializar o PriceMonitor (passando as instâncias reais)
 # O PriceMonitor precisará do db_manager e do telegram_client para enviar alertas
-# CORRIGIDO: Passando TELEGRAM_CHAT_ID para o PriceMonitor
+# Passando TELEGRAM_CHAT_ID para o PriceMonitor
 price_monitor = PriceMonitor(db_manager=db_manager, price_client=price_client, telegram_client=telegram_client, chat_id_for_alerts=TELEGRAM_CHAT_ID)
 logger.info("✅ PriceMonitor instance created.")
 
@@ -100,11 +110,11 @@ logger.info("✅ PriceMonitor instance created.")
 logger.info("Bot application starting...")
 
 # Iniciar o scheduler do PriceMonitor
-# CORRIGIDO: Chamando o método start() do PriceMonitor
+# Chamando o método start() do PriceMonitor
 price_monitor.start()
 logger.info("✅ Price monitoring service started.")
 
-# --- NOVO: Enviar mensagem de startup para o chat de alertas ---
+# --- Enviar mensagem de startup para o chat de alertas ---
 # Verifica se o chat ID para alertas está configurado antes de tentar enviar
 if TELEGRAM_CHAT_ID:
     startup_message = "✅ Bot service started and is now monitoring prices and listening for commands."
@@ -116,13 +126,13 @@ if TELEGRAM_CHAT_ID:
         logger.error(f"❌ Failed to send startup message to chat ID {TELEGRAM_CHAT_ID}: {e}", exc_info=True)
 else:
     logger.warning("Skipping startup message as TELEGRAM_CHAT_ID is not set.")
-# --- Fim NOVO ---
+# --- Fim Mensagem de Startup ---
 
 
 # Iniciar o listener do Telegram (polling)
 # Esta chamada é bloqueante e mantém o script rodando para um Background Worker.
 # O tratamento de erro para Conflict já está dentro de start_listening no TelegramClient.
-# CORRIGIDO: Chamando o método start_listening() do TelegramClient
+# Chamando o método start_listening() do TelegramClient
 telegram_client.start_listening()
 
 
